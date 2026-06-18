@@ -5,6 +5,7 @@
 
 void Board_Init(void);
 void Board_PowerHold(bool enabled);
+void Board_SetDisplayPower(bool enabled);
 void Board_SetRangePower(bool enabled);
 void Board_SetGnssPower(bool enabled);
 void Board_SetImuPower(bool enabled);

@@ -6,9 +6,9 @@
 
 #define BSP_ADC_TIMEOUT_LOOPS 100000UL
 #define BSP_ADC_DMA           DMA1
-#define BSP_ADC_DMA_CH        DMA1_CH5
-#define BSP_ADC_DMA_TC_FLAG   DMA1_FLAG_TC5
-#define BSP_ADC_DMA_GL_FLAG   DMA1_FLAG_GL5
+#define BSP_ADC_DMA_CH        DMA1_CH1
+#define BSP_ADC_DMA_TC_FLAG   DMA1_FLAG_TC1
+#define BSP_ADC_DMA_GL_FLAG   DMA1_FLAG_GL1
 #define BSP_ADC_MODULE        ADC1
 
 static volatile uint16_t g_adc_dma_value;
@@ -59,7 +59,6 @@ void BspAdc_Init(void)
     dma_init.Priority       = DMA_PRIORITY_HIGH;
     dma_init.Mem2Mem        = DMA_M2M_DISABLE;
     DMA_Init(BSP_ADC_DMA_CH, &dma_init);
-    DMA_RequestRemap(DMA1_REMAP_ADC1, BSP_ADC_DMA, BSP_ADC_DMA_CH, ENABLE);
 
     ADC_InitStruct(&init);
     init.MultiChEn      = ENABLE;

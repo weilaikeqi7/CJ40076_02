@@ -684,6 +684,7 @@ static void power_off_sequence(void)
 {
     g_continuous_test_active = false;
     modules_off_for_sleep();
+    Board_SetDisplayPower(false);
     Board_PowerHold(false);
 }
 

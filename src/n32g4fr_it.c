@@ -50,7 +50,7 @@ void USART2_IRQHandler(void)
     BspUart_HandleIrq(BSP_UART_IMU);
 }
 
-void UART4_IRQHandler(void)
+void UART6_IRQHandler(void)
 {
     BspUart_HandleIrq(BSP_UART_RANGE);
 }

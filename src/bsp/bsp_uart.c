@@ -25,7 +25,6 @@ typedef struct
     uint32_t gpio_remap;
     uint32_t apb1_clock;
     uint32_t apb2_clock;
-    DMA_Module* rx_dma_module;
     uint32_t baudrate;
     uint8_t irq_priority;
     uint8_t* rx_buffer;
@@ -33,7 +32,6 @@ typedef struct
     uint8_t* rx_dma_buffer;
     uint16_t rx_dma_size;
     DMA_ChannelType* rx_dma;
-    uint32_t rx_dma_remap;
 } BspUartConfig;
 
 static uint8_t g_gnss_rx_buffer[BSP_UART_GNSS_RX_BUFFER_SIZE];
@@ -57,15 +55,13 @@ static const BspUartConfig g_uart_config[BSP_UART_COUNT] = {
         .gpio_remap = BOARD_GNSS_REMAP,
         .apb1_clock = 0U,
         .apb2_clock = RCC_APB2_PERIPH_USART1,
-        .rx_dma_module = DMA1,
         .baudrate = APP_GNSS_UART_BAUD,
         .irq_priority = 5U,
         .rx_buffer = g_gnss_rx_buffer,
         .rx_buffer_size = BSP_UART_GNSS_RX_BUFFER_SIZE,
         .rx_dma_buffer = g_gnss_dma_rx_buffer,
         .rx_dma_size = BSP_UART_GNSS_RX_BUFFER_SIZE,
-        .rx_dma = DMA1_CH1,
-        .rx_dma_remap = DMA1_REMAP_USART1_RX
+        .rx_dma = DMA1_CH5
     },
     [BSP_UART_IMU] = {
         .module = USART2,
@@ -77,35 +73,31 @@ static const BspUartConfig g_uart_config[BSP_UART_COUNT] = {
         .gpio_remap = BOARD_USART2_REMAP,
         .apb1_clock = RCC_APB1_PERIPH_USART2,
         .apb2_clock = 0U,
-        .rx_dma_module = DMA1,
         .baudrate = APP_JY901B_UART_BAUD,
         .irq_priority = 6U,
         .rx_buffer = g_imu_rx_buffer,
         .rx_buffer_size = BSP_UART_IMU_RX_BUFFER_SIZE,
         .rx_dma_buffer = g_imu_dma_rx_buffer,
         .rx_dma_size = BSP_UART_IMU_RX_BUFFER_SIZE,
-        .rx_dma = DMA1_CH2,
-        .rx_dma_remap = DMA1_REMAP_USART2_RX
+        .rx_dma = DMA1_CH6
     },
     [BSP_UART_RANGE] = {
-        .module = UART4,
-        .irq = UART4_IRQn,
-        .tx_port = BOARD_UART4_TX_PORT,
-        .tx_pin = BOARD_UART4_TX_PIN,
-        .rx_port = BOARD_UART4_RX_PORT,
-        .rx_pin = BOARD_UART4_RX_PIN,
-        .gpio_remap = BOARD_UART4_REMAP,
-        .apb1_clock = RCC_APB1_PERIPH_UART4,
-        .apb2_clock = 0U,
-        .rx_dma_module = DMA2,
+        .module = UART6,
+        .irq = UART6_IRQn,
+        .tx_port = BOARD_RANGE_TX_PORT,
+        .tx_pin = BOARD_RANGE_TX_PIN,
+        .rx_port = BOARD_RANGE_RX_PORT,
+        .rx_pin = BOARD_RANGE_RX_PIN,
+        .gpio_remap = BOARD_RANGE_REMAP,
+        .apb1_clock = 0U,
+        .apb2_clock = RCC_APB2_PERIPH_UART6,
         .baudrate = APP_RANGE_UART_BAUD,
         .irq_priority = 7U,
         .rx_buffer = g_range_rx_buffer,
         .rx_buffer_size = BSP_UART_RANGE_RX_BUFFER_SIZE,
         .rx_dma_buffer = g_range_dma_rx_buffer,
         .rx_dma_size = BSP_UART_RANGE_RX_BUFFER_SIZE,
-        .rx_dma = DMA2_CH3,
-        .rx_dma_remap = DMA2_REMAP_UART4_RX
+        .rx_dma = DMA2_CH1
     },
     [BSP_UART_DISPLAY] = {
         .module = UART5,
@@ -117,15 +109,13 @@ static const BspUartConfig g_uart_config[BSP_UART_COUNT] = {
         .gpio_remap = BOARD_DISPLAY_REMAP,
         .apb1_clock = RCC_APB1_PERIPH_UART5,
         .apb2_clock = 0U,
-        .rx_dma_module = DMA1,
         .baudrate = APP_DISPLAY_UART_BAUD,
         .irq_priority = 8U,
         .rx_buffer = g_display_rx_buffer,
         .rx_buffer_size = BSP_UART_DISPLAY_RX_BUFFER_SIZE,
         .rx_dma_buffer = g_display_dma_rx_buffer,
         .rx_dma_size = BSP_UART_DISPLAY_RX_BUFFER_SIZE,
-        .rx_dma = DMA1_CH4,
-        .rx_dma_remap = DMA1_REMAP_UART5_RX
+        .rx_dma = DMA1_CH8
     },
 };
 
@@ -304,7 +294,6 @@ static void uart_init_one(BspUartId id)
     dma_init.Priority = DMA_PRIORITY_VERY_HIGH;
     dma_init.Mem2Mem = DMA_M2M_DISABLE;
     DMA_Init(config->rx_dma, &dma_init);
-    DMA_RequestRemap(config->rx_dma_remap, config->rx_dma_module, config->rx_dma, ENABLE);
 
     nvic_init.NVIC_IRQChannel                   = (uint8_t)config->irq;
     nvic_init.NVIC_IRQChannelPreemptionPriority = config->irq_priority;

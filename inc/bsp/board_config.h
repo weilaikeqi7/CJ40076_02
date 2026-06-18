@@ -12,53 +12,68 @@
 #define BOARD_BAT_ADC_PIN           GPIO_PIN_0
 #define BOARD_BAT_ADC_CHANNEL       ADC_CH_1
 
-#define BOARD_PWR_RANGE_PORT        GPIOA
-#define BOARD_PWR_RANGE_PIN         GPIO_PIN_7
+/* 主电源使能 PB12，开机拉高自锁系统供电 */
+#define BOARD_PWR_HOLD_PORT         GPIOB
+#define BOARD_PWR_HOLD_PIN          GPIO_PIN_12
+#define BOARD_PWR_HOLD_ACTIVE_HIGH  1U
+
+/* 显示板电源使能 PB4，开机拉高 */
+#define BOARD_PWR_DISPLAY_PORT      GPIOB
+#define BOARD_PWR_DISPLAY_PIN       GPIO_PIN_4
+#define BOARD_PWR_DISPLAY_ACTIVE_HIGH 1U
+
+/* 激光测距电源使能 PB3 */
+#define BOARD_PWR_RANGE_PORT        GPIOB
+#define BOARD_PWR_RANGE_PIN         GPIO_PIN_3
 #define BOARD_PWR_RANGE_ACTIVE_HIGH 1U
 
+/* 电子罗盘电源使能 PA8 */
+#define BOARD_PWR_IMU_PORT          GPIOA
+#define BOARD_PWR_IMU_PIN           GPIO_PIN_8
+#define BOARD_PWR_IMU_ACTIVE_HIGH   1U
+
+/* GNSS 电源使能 PA15 */
+#define BOARD_PWR_GNSS_PORT         GPIOA
+#define BOARD_PWR_GNSS_PIN          GPIO_PIN_15
+#define BOARD_PWR_GNSS_ACTIVE_HIGH  1U
+
+/* 电源键 PA5 */
+#define BOARD_KEY_POWER_PORT        GPIOA
+#define BOARD_KEY_POWER_PIN         GPIO_PIN_5
+#define BOARD_KEY_POWER_ACTIVE_HIGH 0U
+
+/* 模式键 PA4 */
+#define BOARD_KEY_MODE_PORT         GPIOA
+#define BOARD_KEY_MODE_PIN          GPIO_PIN_4
+#define BOARD_KEY_MODE_ACTIVE_HIGH  0U
+
+/* 电子罗盘 USART2 PA2/PA3，无重映射(RMP00) */
 #define BOARD_USART2_TX_PORT        GPIOA
 #define BOARD_USART2_TX_PIN         GPIO_PIN_2
 #define BOARD_USART2_RX_PORT        GPIOA
 #define BOARD_USART2_RX_PIN         GPIO_PIN_3
-#define BOARD_USART2_REMAP          GPIO_RMP1_USART2
+#define BOARD_USART2_REMAP          0U
 
+/* GNSS USART1 PA9/PA10，无重映射 */
 #define BOARD_GNSS_TX_PORT          GPIOA
 #define BOARD_GNSS_TX_PIN           GPIO_PIN_9
 #define BOARD_GNSS_RX_PORT          GPIOA
 #define BOARD_GNSS_RX_PIN           GPIO_PIN_10
 #define BOARD_GNSS_REMAP            0U
 
-#define BOARD_KEY_MODE_PORT         GPIOA
-#define BOARD_KEY_MODE_PIN          GPIO_PIN_6
-#define BOARD_KEY_MODE_ACTIVE_HIGH  0U
-
-#define BOARD_PWR_IMU_PORT          GPIOA
-#define BOARD_PWR_IMU_PIN           GPIO_PIN_8
-#define BOARD_PWR_IMU_ACTIVE_HIGH   1U
-
-#define BOARD_KEY_POWER_PORT        GPIOA
-#define BOARD_KEY_POWER_PIN         GPIO_PIN_9
-#define BOARD_KEY_POWER_ACTIVE_HIGH 0U
-
-#define BOARD_PWR_HOLD_PORT         GPIOA
-#define BOARD_PWR_HOLD_PIN          GPIO_PIN_10
-#define BOARD_PWR_HOLD_ACTIVE_HIGH  1U
-
-#define BOARD_PWR_GNSS_PORT         GPIOA
-#define BOARD_PWR_GNSS_PIN          GPIO_PIN_12
-#define BOARD_PWR_GNSS_ACTIVE_HIGH  1U
-
+/* 显示板通讯 UART5 PB13/PB14，UART5_RMP[1:0]=01 */
 #define BOARD_DISPLAY_TX_PORT       GPIOB
-#define BOARD_DISPLAY_TX_PIN        GPIO_PIN_4
+#define BOARD_DISPLAY_TX_PIN        GPIO_PIN_13
 #define BOARD_DISPLAY_RX_PORT       GPIOB
-#define BOARD_DISPLAY_RX_PIN        GPIO_PIN_5
-#define BOARD_DISPLAY_REMAP         GPIO_RMP3_UART5
+#define BOARD_DISPLAY_RX_PIN        GPIO_PIN_14
+#define BOARD_DISPLAY_REMAP         GPIO_RMP1_UART5
 
-#define BOARD_UART4_TX_PORT         GPIOB
-#define BOARD_UART4_TX_PIN          GPIO_PIN_0
-#define BOARD_UART4_RX_PORT         GPIOB
-#define BOARD_UART4_RX_PIN          GPIO_PIN_1
-#define BOARD_UART4_REMAP           GPIO_RMP3_UART4
+/* 激光测距 UART6 PB0/PB1，UART6_RMP[1:0]=11 */
+#define BOARD_RANGE_TX_PORT         GPIOB
+#define BOARD_RANGE_TX_PIN          GPIO_PIN_0
+#define BOARD_RANGE_RX_PORT         GPIOB
+#define BOARD_RANGE_RX_PIN          GPIO_PIN_1
+#define BOARD_RANGE_REMAP           GPIO_RMP3_UART6
 
 #define APP_GNSS_UART_BAUD          115200U
 #define APP_JY901B_UART_BAUD        9600U
