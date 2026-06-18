@@ -1,0 +1,10 @@
+device STM32F413RG
+si SWD
+speed 4000
+rsettype 3
+connect
+h
+loadfile build/Debug/display_board_gcc.elf
+r
+g
+exit

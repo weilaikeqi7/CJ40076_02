@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "J-Link Debug Display CJ40076",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "jlink",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/Debug/display_board_gcc.elf",
+            "device": "STM32F413RG",
+            "interface": "swd",
+            "serverpath": "JLinkGDBServerCL.exe",
+            "gdbPath": "arm-none-eabi-gdb.exe",
+            "runToEntryPoint": "main",
+            "preLaunchTask": "CMake: Build",
+            "serverArgs": [
+                "-speed",
+                "4000"
+            ]
+        }
+    ]
+}
