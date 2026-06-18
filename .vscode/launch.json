@@ -10,7 +10,7 @@
             "executable": "${workspaceFolder}/cmake-build-debug-n32/CJ40076_02.elf",
             "device": "N32G4FRHE",
             "interface": "swd",
-            "serverpath": "D:/Program Files/SEGGER/JLink_V946/JLinkGDBServerCL.exe",
+            "serverpath": "JLinkGDBServerCL.exe",
             "gdbPath": "arm-none-eabi-gdb.exe",
             "runToEntryPoint": "main",
             "preLaunchTask": "CMake: Build",

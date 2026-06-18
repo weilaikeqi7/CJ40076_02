@@ -39,7 +39,7 @@
         {
             "label": "J-Link: Flash",
             "type": "process",
-            "command": "D:/Program Files/SEGGER/JLink_V946/JLink.exe",
+            "command": "JLink.exe",
             "args": [
                 "-NoGui",
                 "1",
@@ -55,7 +55,7 @@
         {
             "label": "J-Link: RTT Viewer",
             "type": "process",
-            "command": "D:/Program Files/SEGGER/JLink_V946/JLinkRTTViewer.exe",
+            "command": "JLinkRTTViewer.exe",
             "args": [
                 "-device",
                 "N32G4FRHE",
