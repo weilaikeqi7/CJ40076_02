@@ -48,7 +48,11 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint8_t rx_byte;
+/* DMA 环形接收缓冲：USART1_RX 经 DMA2_Stream2 循环写入，配合空闲中断分帧 */
+#define RX_DMA_BUF_SIZE 256U
+static uint8_t rx_dma_buf[RX_DMA_BUF_SIZE];
+static volatile uint16_t rx_dma_old_pos;
+extern DMA_HandleTypeDef hdma_usart1_rx;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -121,6 +125,21 @@ static uint8_t parse_and_update_state(void)
   }
   return 0;
 }
+
+/* 将一段新到字节追加进协议解析缓冲，溢出时丢弃最旧数据保证不死锁 */
+static void rx_buf_push(const uint8_t *data, uint16_t length)
+{
+  for (uint16_t k = 0U; k < length; ++k)
+  {
+    if (rx_len >= sizeof(rx_buf))
+    {
+      /* 缓冲满：丢弃最旧 1 字节，滑窗继续，避免整帧因抖动卡死 */
+      (void)memmove(rx_buf, &rx_buf[1], rx_len - 1U);
+      rx_len--;
+    }
+    rx_buf[rx_len++] = data[k];
+  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -166,8 +185,14 @@ int main(void)
     Error_Handler();
   }
 
-  // 开启USART1的中断接收，以1个字节的接收方式进行（使用全局定义的rx_byte变量，避免局部变量导致未定义行为）
-  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+  // 启动 DMA + 空闲中断接收：DMA 循环填充 rx_dma_buf，空闲/半满/满时触发 RxEventCallback
+  rx_dma_old_pos = 0U;
+  if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_dma_buf, RX_DMA_BUF_SIZE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* 关闭 DMA 半传输中断，仅在空闲/满传输时处理，减少无谓回调 */
+  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -234,15 +259,36 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+/* DMA + 空闲中断接收事件：Size 为 DMA 当前写入位置（累计），按环形差量取出新字节 */
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  if (huart->Instance == USART1)
+  if (huart->Instance != USART1)
   {
-    if (rx_len < sizeof(rx_buf))
+    return;
+  }
+
+  if (Size != rx_dma_old_pos)
+  {
+    if (Size > rx_dma_old_pos)
     {
-      rx_buf[rx_len++] = rx_byte;
+      /* 未回绕：一段连续数据 */
+      rx_buf_push(&rx_dma_buf[rx_dma_old_pos], (uint16_t)(Size - rx_dma_old_pos));
     }
-    HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+    else
+    {
+      /* 已回绕：先取尾部，再取头部 */
+      rx_buf_push(&rx_dma_buf[rx_dma_old_pos], (uint16_t)(RX_DMA_BUF_SIZE - rx_dma_old_pos));
+      if (Size > 0U)
+      {
+        rx_buf_push(&rx_dma_buf[0], Size);
+      }
+    }
+    rx_dma_old_pos = Size;
+  }
+
+  if (rx_dma_old_pos >= RX_DMA_BUF_SIZE)
+  {
+    rx_dma_old_pos = 0U;
   }
 }
 
@@ -262,8 +308,10 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     __HAL_UART_CLEAR_OREFLAG(huart);
     __HAL_UART_CLEAR_FEFLAG(huart);
     __HAL_UART_CLEAR_NEFLAG(huart);
-    /* 重新挂起单字节接收 */
-    HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
+    /* 重启 DMA + 空闲中断接收 */
+    rx_dma_old_pos = 0U;
+    (void)HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_dma_buf, RX_DMA_BUF_SIZE);
+    __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   }
 }
 
