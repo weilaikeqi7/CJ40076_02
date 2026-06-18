@@ -180,7 +180,8 @@ int main(void)
     Error_Handler();
   }
 
-  if (KA025VG_ShowFixedScreen() != HAL_OK)
+  // 开机先清屏黑屏，不显示任何元素，等待主控板传来状态数据后再渲染界面
+  if (KA025VG_Fill(0x00U) != HAL_OK)
   {
     Error_Handler();
   }
