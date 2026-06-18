@@ -1,0 +1,8 @@
+#ifndef APP_CONFIG_H
+#define APP_CONFIG_H
+
+#define APP_FIRMWARE_NAME "CJ40076"
+#define APP_HARDWARE_VER  "CJ40076-V2.0"
+#define APP_SOFTWARE_VER  "0.1.0"
+
+#endif /* APP_CONFIG_H */

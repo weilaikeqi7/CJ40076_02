@@ -1,0 +1,10 @@
+device N32G4FRHE
+si SWD
+speed 4000
+rsettype 0
+r
+h
+loadfile cmake-build-debug-n32/CJ40076_02.hex
+r
+g
+exit
