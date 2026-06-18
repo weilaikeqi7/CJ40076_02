@@ -5,6 +5,7 @@
 #include "n32g4fr_rcc.h"
 
 #define BSP_ADC_TIMEOUT_LOOPS 100000UL
+#define BSP_ADC_OVERSAMPLE    8U
 #define BSP_ADC_DMA           DMA1
 #define BSP_ADC_DMA_CH        DMA1_CH1
 #define BSP_ADC_DMA_TC_FLAG   DMA1_FLAG_TC1
@@ -12,8 +13,6 @@
 #define BSP_ADC_MODULE        ADC1
 
 static volatile uint16_t g_adc_dma_value;
-static uint8_t g_adc_channel;
-static bool g_adc_started;
 
 static void adc_start_channel(uint8_t channel)
 {
@@ -29,9 +28,6 @@ static void adc_start_channel(uint8_t channel)
     ADC_EnableDMA(BSP_ADC_MODULE, ENABLE);
     DMA_EnableChannel(BSP_ADC_DMA_CH, ENABLE);
     ADC_EnableSoftwareStartConv(BSP_ADC_MODULE, ENABLE);
-
-    g_adc_channel = channel;
-    g_adc_started = true;
 }
 
 void BspAdc_Init(void)
@@ -42,8 +38,8 @@ void BspAdc_Init(void)
 
     RCC_EnableAHBPeriphClk(RCC_AHB_PERIPH_DMA1, ENABLE);
     RCC_EnableAHBPeriphClk(RCC_AHB_PERIPH_ADC1, ENABLE);
-    ADC_ConfigClk(ADC_CTRL3_CKMOD_AHB, RCC_ADCHCLK_DIV4);
-    RCC_ConfigAdc1mClk(RCC_ADC1MCLK_SRC_HSI, RCC_ADC1MCLK_DIV16);
+    ADC_ConfigClk(ADC_CTRL3_CKMOD_AHB, RCC_ADCHCLK_DIV16);
+    RCC_ConfigAdc1mClk(RCC_ADC1MCLK_SRC_HSE, RCC_ADC1MCLK_DIV8);
 
     DMA_DeInit(BSP_ADC_DMA_CH);
     DMA_StructInit(&dma_init);
@@ -55,14 +51,14 @@ void BspAdc_Init(void)
     dma_init.DMA_MemoryInc  = DMA_MEM_INC_DISABLE;
     dma_init.PeriphDataSize = DMA_PERIPH_DATA_SIZE_HALFWORD;
     dma_init.MemDataSize    = DMA_MemoryDataSize_HalfWord;
-    dma_init.CircularMode   = DMA_MODE_CIRCULAR;
+    dma_init.CircularMode   = DMA_MODE_NORMAL;
     dma_init.Priority       = DMA_PRIORITY_HIGH;
     dma_init.Mem2Mem        = DMA_M2M_DISABLE;
     DMA_Init(BSP_ADC_DMA_CH, &dma_init);
 
     ADC_InitStruct(&init);
     init.MultiChEn      = ENABLE;
-    init.ContinueConvEn = ENABLE;
+    init.ContinueConvEn = DISABLE;
     init.ExtTrigSelect  = ADC_EXT_TRIGCONV_NONE;
     init.DatAlign       = ADC_DAT_ALIGN_R;
     init.ChsNumber      = 1U;
@@ -83,27 +79,13 @@ void BspAdc_Init(void)
     }
 
     g_adc_dma_value = 0U;
-    g_adc_channel = 0xFFU;
-    g_adc_started = false;
 }
 
-bool BspAdc_ReadRaw(uint8_t channel, uint16_t* raw)
+static bool adc_sample_once(uint8_t channel, uint16_t* raw)
 {
     uint32_t timeout = BSP_ADC_TIMEOUT_LOOPS;
 
-    if (raw == 0)
-    {
-        return false;
-    }
-
-    if ((!g_adc_started) || (g_adc_channel != channel))
-    {
-        adc_start_channel(channel);
-    }
-    else
-    {
-        DMA_ClearFlag(BSP_ADC_DMA_GL_FLAG, BSP_ADC_DMA);
-    }
+    adc_start_channel(channel);
 
     while ((DMA_GetFlagStatus(BSP_ADC_DMA_TC_FLAG, BSP_ADC_DMA) == RESET) && (timeout > 0U))
     {
@@ -116,5 +98,43 @@ bool BspAdc_ReadRaw(uint8_t channel, uint16_t* raw)
     }
 
     *raw = g_adc_dma_value;
+    return true;
+}
+
+bool BspAdc_ReadRaw(uint8_t channel, uint16_t* raw)
+{
+    uint32_t sum = 0U;
+    uint16_t min = 0xFFFFU;
+    uint16_t max = 0U;
+    uint8_t  i;
+
+    if (raw == 0)
+    {
+        return false;
+    }
+
+    for (i = 0U; i < BSP_ADC_OVERSAMPLE; ++i)
+    {
+        uint16_t sample = 0U;
+
+        if (!adc_sample_once(channel, &sample))
+        {
+            return false;
+        }
+
+        sum += sample;
+        if (sample < min)
+        {
+            min = sample;
+        }
+        if (sample > max)
+        {
+            max = sample;
+        }
+    }
+
+    sum -= min;
+    sum -= max;
+    *raw = (uint16_t)(sum / (BSP_ADC_OVERSAMPLE - 2U));
     return true;
 }
