@@ -11,8 +11,7 @@
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": "$gcc"
+            }
         },
         {
             "label": "CMake: Build",
@@ -31,7 +30,7 @@
                 "isDefault": true
             },
             "dependsOn": "CMake: Configure",
-            "problemMatcher": "$gcc"
+            "problemMatcher": []
         },
         {
             "label": "J-Link: Flash",
