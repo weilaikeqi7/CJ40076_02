@@ -1,5 +1,6 @@
 #include "keys.h"
 
+#include "app_log.h"
 #include "board.h"
 #include "board_config.h"
 
@@ -12,6 +13,7 @@ typedef struct
     bool long_sent;
     uint32_t changed_ms;
     uint32_t pressed_ms;
+    uint32_t last_hold_log_seconds;
 } DebouncedKey;
 
 static DebouncedKey g_power_key;
@@ -24,12 +26,25 @@ static void key_reset(DebouncedKey* key, bool pressed, uint32_t now_ms)
     key->long_sent = false;
     key->changed_ms = now_ms;
     key->pressed_ms = pressed ? now_ms : 0U;
+    key->last_hold_log_seconds = 0U;
 }
 
 void Keys_Init(void)
 {
-    key_reset(&g_power_key, Board_ReadPowerKey(), 0U);
-    key_reset(&g_mode_key, Board_ReadModeKey(), 0U);
+    const bool power_pressed = Board_ReadPowerKey();
+    const bool mode_pressed = Board_ReadModeKey();
+
+    key_reset(&g_power_key, power_pressed, 0U);
+    key_reset(&g_mode_key, mode_pressed, 0U);
+
+    if (power_pressed)
+    {
+        APP_LOGI("key", "power pressed at startup");
+    }
+    if (mode_pressed)
+    {
+        APP_LOGI("key", "mode pressed at startup");
+    }
 }
 
 static KeyEvent update_power_key(bool raw_pressed, uint32_t now_ms)
@@ -51,11 +66,30 @@ static KeyEvent update_power_key(bool raw_pressed, uint32_t now_ms)
             {
                 g_power_key.pressed_ms = now_ms;
                 g_power_key.long_sent = false;
+                g_power_key.last_hold_log_seconds = 0U;
+                APP_LOGI("key", "power pressed");
             }
-            else if (!g_power_key.long_sent)
+            else
             {
-                event = KEY_EVENT_POWER_SHORT;
+                const uint32_t held_ms = now_ms - g_power_key.pressed_ms;
+                APP_LOGI("key", "power released after %u ms", (unsigned int)held_ms);
+                if (!g_power_key.long_sent)
+                {
+                    APP_LOGI("key", "power short press");
+                    event = KEY_EVENT_POWER_SHORT;
+                }
             }
+        }
+    }
+
+    if (g_power_key.stable_pressed)
+    {
+        const uint32_t held_seconds =
+            (now_ms - g_power_key.pressed_ms) / 1000U;
+        if (held_seconds > g_power_key.last_hold_log_seconds)
+        {
+            g_power_key.last_hold_log_seconds = held_seconds;
+            APP_LOGI("key", "power held %u s", (unsigned int)held_seconds);
         }
     }
 
@@ -63,6 +97,7 @@ static KeyEvent update_power_key(bool raw_pressed, uint32_t now_ms)
         ((now_ms - g_power_key.pressed_ms) >= APP_POWER_LONG_PRESS_MS))
     {
         g_power_key.long_sent = true;
+        APP_LOGI("key", "power long press");
         event = KEY_EVENT_POWER_LONG;
     }
 
@@ -87,11 +122,27 @@ static KeyEvent update_mode_key(bool raw_pressed, uint32_t now_ms)
             if (raw_pressed)
             {
                 g_mode_key.pressed_ms = now_ms;
+                g_mode_key.last_hold_log_seconds = 0U;
+                APP_LOGI("key", "mode pressed");
             }
             else
             {
+                const uint32_t held_ms = now_ms - g_mode_key.pressed_ms;
+                APP_LOGI("key", "mode released after %u ms", (unsigned int)held_ms);
+                APP_LOGI("key", "mode short press");
                 event = KEY_EVENT_MODE_SHORT;
             }
+        }
+    }
+
+    if (g_mode_key.stable_pressed)
+    {
+        const uint32_t held_seconds =
+            (now_ms - g_mode_key.pressed_ms) / 1000U;
+        if (held_seconds > g_mode_key.last_hold_log_seconds)
+        {
+            g_mode_key.last_hold_log_seconds = held_seconds;
+            APP_LOGI("key", "mode held %u s", (unsigned int)held_seconds);
         }
     }
 

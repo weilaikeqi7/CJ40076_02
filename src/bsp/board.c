@@ -65,13 +65,6 @@ void Board_Init(void)
     /* PA15/PB3/PB4 默认是 JTAG 引脚，禁用 JTAG-DP 仅保留 SW-DP 后才能作普通 GPIO 使用 */
     GPIO_ConfigPinRemap(GPIO_RMP_SW_JTAG_SW_ENABLE, ENABLE);
 
-    BspGpio_InitOutput(BOARD_PWR_HOLD_PORT, BOARD_PWR_HOLD_PIN, false);
-    Board_PowerHold(true);
-
-    /* 显示板电源使能，开机拉高 */
-    BspGpio_InitOutput(BOARD_PWR_DISPLAY_PORT, BOARD_PWR_DISPLAY_PIN, false);
-    Board_SetDisplayPower(true);
-
     BspGpio_InitOutput(BOARD_PWR_RANGE_PORT, BOARD_PWR_RANGE_PIN, false);
     BspGpio_InitOutput(BOARD_PWR_IMU_PORT, BOARD_PWR_IMU_PIN, false);
     BspGpio_InitOutput(BOARD_PWR_GNSS_PORT, BOARD_PWR_GNSS_PIN, false);
@@ -80,6 +73,18 @@ void Board_Init(void)
     power_key_pull = (BOARD_KEY_POWER_ACTIVE_HIGH != 0U) ? BSP_GPIO_PULL_DOWN : BSP_GPIO_PULL_UP;
     BspGpio_InitInput(BOARD_KEY_MODE_PORT, BOARD_KEY_MODE_PIN, mode_key_pull);
     BspGpio_InitInput(BOARD_KEY_POWER_PORT, BOARD_KEY_POWER_PIN, power_key_pull);
+
+    BspGpio_InitOutput(BOARD_PWR_HOLD_PORT, BOARD_PWR_HOLD_PIN, false);
+    BspGpio_InitOutput(BOARD_PWR_DISPLAY_PORT, BOARD_PWR_DISPLAY_PIN, false);
+
+    while (!Board_ReadPowerKey())
+    {
+        /* Wait for the active-low PA5 power key before latching power. */
+    }
+
+    APP_LOGI("key", "power pressed, latching system power");
+    Board_PowerHold(true);
+    Board_SetDisplayPower(true);
 
     BspGpio_InitAnalog(BOARD_BAT_ADC_PORT, BOARD_BAT_ADC_PIN);
 
