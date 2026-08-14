@@ -55,6 +55,46 @@ void DisplayOutput_SetDigit(uint8_t digit_id, int8_t value)
     g_serial_state.digits[digit_id - DISPLAY_FIRST_DIGIT_ID] = ((value >= 0) && (value <= 9)) ? value : -1;
 }
 
+void DisplayOutput_SetChar(uint8_t digit_id, char value)
+{
+    if ((digit_id < DISPLAY_FIRST_DIGIT_ID) || (digit_id > DISPLAY_LAST_DIGIT_ID))
+    {
+        return;
+    }
+
+    if ((value >= '0') && (value <= '9'))
+    {
+        DisplayOutput_SetDigit(digit_id, (int8_t)(value - '0'));
+        return;
+    }
+
+    if (value == '-')
+    {
+        DisplayOutput_SetDash(digit_id, true);
+        return;
+    }
+
+    switch (value)
+    {
+    case 'A':
+    case 'C':
+    case 'E':
+    case 'H':
+    case 'I':
+    case 'P':
+    case 'S':
+    case 'V':
+    case 'n':
+    case 'r':
+    case 't':
+        g_serial_state.digits[digit_id - DISPLAY_FIRST_DIGIT_ID] = (int8_t)value;
+        break;
+    default:
+        g_serial_state.digits[digit_id - DISPLAY_FIRST_DIGIT_ID] = -1;
+        break;
+    }
+}
+
 void DisplayOutput_SetDash(uint8_t digit_id, bool on)
 {
     if ((digit_id < DISPLAY_FIRST_DIGIT_ID) || (digit_id > DISPLAY_LAST_DIGIT_ID))

@@ -8,7 +8,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-static AppLogLevel s_log_level = APP_LOG_LEVEL_DEBUG;
+static AppLogLevel s_log_level = APP_LOG_LEVEL_INFO;
 
 static const char* const s_level_names[] = {
     "D",

@@ -22,7 +22,6 @@ typedef struct
     uint32_t last_distance_mm;
     uint8_t status;
     uint8_t target_index;
-    bool target_valid;
     bool first_valid;
     bool last_valid;
     uint8_t self_status[4];

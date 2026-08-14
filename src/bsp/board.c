@@ -1,6 +1,5 @@
 #include "board.h"
 
-#include "app_log.h"
 #include "board_config.h"
 #include "bsp_adc.h"
 #include "bsp_gpio.h"
@@ -82,7 +81,6 @@ void Board_Init(void)
         /* Wait for the active-low PA5 power key before latching power. */
     }
 
-    APP_LOGI("key", "power pressed, latching system power");
     Board_PowerHold(true);
     Board_SetDisplayPower(true);
 
@@ -90,5 +88,4 @@ void Board_Init(void)
 
     BspAdc_Init();
 
-    APP_LOGI("board", "pins and peripherals initialized");
 }

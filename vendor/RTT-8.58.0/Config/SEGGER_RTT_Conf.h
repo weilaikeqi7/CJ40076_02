@@ -26,11 +26,7 @@ Purpose : User configuration file for RTT.
 #define SEGGER_RTT_MODE_DEFAULT         SEGGER_RTT_MODE_NO_BLOCK_TRIM
 #define SEGGER_RTT_PRINTF_BUFFER_SIZE   128U
 
-#if defined(APP_DEBUG_BUILD) && (APP_DEBUG_BUILD == 1)
-#define BUFFER_SIZE_UP                  2048
-#else
 #define BUFFER_SIZE_UP                  1024
-#endif
 
 /*********************************************************************
 *

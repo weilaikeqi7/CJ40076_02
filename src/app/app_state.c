@@ -105,6 +105,13 @@ void AppState_UpdateOrientation(const OrientationData* data)
     taskEXIT_CRITICAL();
 }
 
+void AppState_ClearOrientation(void)
+{
+    taskENTER_CRITICAL();
+    (void)memset(&g_state.orientation, 0, sizeof(g_state.orientation));
+    taskEXIT_CRITICAL();
+}
+
 void AppState_UpdateGnss(const GnssData* data)
 {
     if (data == 0)
@@ -114,6 +121,13 @@ void AppState_UpdateGnss(const GnssData* data)
 
     taskENTER_CRITICAL();
     g_state.gnss = *data;
+    taskEXIT_CRITICAL();
+}
+
+void AppState_ClearGnss(void)
+{
+    taskENTER_CRITICAL();
+    (void)memset(&g_state.gnss, 0, sizeof(g_state.gnss));
     taskEXIT_CRITICAL();
 }
 

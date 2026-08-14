@@ -11,6 +11,7 @@ typedef enum
     APP_MODE_SINGLE = 0,
     APP_MODE_CONTINUOUS,
     APP_MODE_MULTI,
+    APP_MODE_WORK_TIME_TEST,
     APP_MODE_COUNT
 } AppWorkMode;
 
@@ -42,7 +43,9 @@ void AppState_UpdateBattery(const BatteryData* data);
 void AppState_UpdateRange(const RangefinderData* data);
 void AppState_ClearRange(void);
 void AppState_UpdateOrientation(const OrientationData* data);
+void AppState_ClearOrientation(void);
 void AppState_UpdateGnss(const GnssData* data);
+void AppState_ClearGnss(void);
 void AppState_SetUptime(uint32_t uptime_ms);
 void AppState_SetMeasureCount(uint32_t count);
 void AppState_Get(AppStateSnapshot* snapshot);

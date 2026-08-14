@@ -4,7 +4,6 @@
 #include "SEGGER_RTT.h"
 #include "app_config.h"
 #include "cm_backtrace.h"
-#include "n32g4fr_dbg.h"
 #include "task.h"
 
 #include <stdarg.h>
@@ -12,9 +11,6 @@
 
 void AppDebug_Init(void)
 {
-#if defined(APP_DEBUG_BUILD) && (APP_DEBUG_BUILD == 1)
-    DBG_ConfigPeriph(DBG_SLEEP | DBG_STOP | DBG_STDBY, ENABLE);
-#endif
     SEGGER_RTT_Init();
     SEGGER_RTT_ConfigUpBuffer(0, "Terminal", 0, 0, SEGGER_RTT_MODE_NO_BLOCK_TRIM);
     SEGGER_RTT_WriteString(0, "\r\n");

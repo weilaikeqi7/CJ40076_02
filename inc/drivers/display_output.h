@@ -47,6 +47,7 @@ void DisplayOutput_Init(void);
 void DisplayOutput_ClearBuffer(void);
 void DisplayOutput_SetAll(bool on);
 void DisplayOutput_SetDigit(uint8_t digit_id, int8_t value);
+void DisplayOutput_SetChar(uint8_t digit_id, char value);
 void DisplayOutput_SetDash(uint8_t digit_id, bool on);
 void DisplayOutput_SetNumberRightAligned(const uint8_t* digit_ids, uint8_t digit_count, uint32_t value);
 void DisplayOutput_SetSignedNumberRightAligned(const uint8_t* digit_ids, uint8_t digit_count, int32_t value);

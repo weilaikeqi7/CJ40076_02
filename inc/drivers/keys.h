@@ -1,6 +1,7 @@
 #ifndef KEYS_H
 #define KEYS_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef enum
@@ -13,5 +14,7 @@ typedef enum
 
 void Keys_Init(void);
 KeyEvent Keys_Poll(uint32_t now_ms);
+bool Keys_IsPowerPressed(void);
+bool Keys_IsModePressed(void);
 
 #endif /* KEYS_H */

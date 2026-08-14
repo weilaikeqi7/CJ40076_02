@@ -1,7 +1,6 @@
 #include "app_tasks.h"
 
 #include "app_log.h"
-#include "app_runtime_stats.h"
 #include "app_state.h"
 #include "battery.h"
 #include "board.h"
@@ -15,7 +14,6 @@
 #include "module_selftest.h"
 #include "power_manager.h"
 #include "rangefinder.h"
-#include "portable.h"
 #include "task.h"
 
 #include <math.h>
@@ -27,30 +25,54 @@
 #define APP_CONTROL_TASK_STACK_WORDS  (configMINIMAL_STACK_SIZE * 3U)
 #define APP_DISPLAY_TASK_STACK_WORDS  (configMINIMAL_STACK_SIZE * 2U)
 #define APP_EARTH_RADIUS_M           6371000.0
+#define APP_CALIBRATION_HOLD_START_MS 600U
+#define APP_CALIBRATION_REPEAT_MS     100U
+#define APP_CALIBRATION_NEXT_PAGE_MS 1000U
+
+typedef enum
+{
+    CALIBRATION_PAGE_NONE = 0,
+    CALIBRATION_PAGE_PITCH_INSTALL,
+    CALIBRATION_PAGE_YAW_INSTALL,
+    CALIBRATION_PAGE_YAW_ERROR,
+    CALIBRATION_PAGE_SAVE
+} CalibrationPage;
 
 static bool g_range_powered;
 static bool g_imu_powered;
 static bool g_gnss_powered;
 static bool g_continuous_started;
-static bool g_continuous_test_active;
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+static bool g_work_time_test_active;
+static uint32_t g_work_time_test_next_ms;
+#endif
 static bool g_imu_calibration_powered;
-static volatile bool g_display_calibration_prompt;
+static bool g_imu_mag_calibration_active;
+static volatile bool g_lcd_calibration_prompt;
+static volatile CalibrationPage g_calibration_page;
+static CalibrationOffsets g_calibration_offsets;
+static CalibrationOffsets g_calibration_edit_offsets;
+static uint32_t g_calibration_power_hold_ms;
+static uint32_t g_calibration_mode_hold_ms;
+static uint32_t g_calibration_power_repeat_ms;
+static uint32_t g_calibration_mode_repeat_ms;
+static uint32_t g_calibration_both_hold_ms;
+static bool g_calibration_power_repeated;
+static bool g_calibration_mode_repeated;
+static bool g_calibration_both_active;
+static bool g_calibration_wait_release;
 static bool g_measure_pending;
 static AppWorkMode g_measure_mode = APP_MODE_SINGLE;
 static uint32_t g_measure_start_ms;
-static uint32_t g_continuous_test_next_ms;
 static uint32_t g_mode_click_last_ms;
 static uint8_t g_continuous_sample_count;
 static uint8_t g_mode_click_count;
 static bool g_range_cycle_active;
-static bool g_range_cycle_got_any;
-static bool g_range_cycle_has_single;
 static bool g_range_cycle_has_first;
 static bool g_range_cycle_has_last;
 static uint8_t g_range_cycle_last_index;
 static uint8_t g_range_cycle_max_index;
 static uint32_t g_range_cycle_last_rx_ms;
-static uint32_t g_range_cycle_single_mm;
 static uint32_t g_range_cycle_first_mm;
 static uint32_t g_range_cycle_last_mm;
 static uint8_t g_range_cycle_last_status;
@@ -58,26 +80,81 @@ static uint32_t g_range_rx_bytes_since_start;
 static uint32_t g_range_frames_since_start;
 static bool g_range_command_ack_received;
 static volatile uint8_t g_range_last_ack_command;
-static uint8_t g_last_logged_target_coord = 0xFFU;
+
+static void display_battery_symbols(uint8_t level);
+static int32_t normalize_degrees(int32_t degrees);
 
 static uint32_t tick_ms(void)
 {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-static void log_sram2_heap_once(void)
+static int32_t normalize_yaw_centidegree(int32_t yaw_cd)
 {
-    const size_t free_now = xPortGetFreeHeapSize();
-    const size_t min_free = xPortGetMinimumEverFreeHeapSize();
-    const size_t used_now = configTOTAL_HEAP_SIZE - free_now;
-    const size_t peak_used = configTOTAL_HEAP_SIZE - min_free;
+    while (yaw_cd > 18000)
+    {
+        yaw_cd -= 36000;
+    }
+    while (yaw_cd <= -18000)
+    {
+        yaw_cd += 36000;
+    }
+    return yaw_cd;
+}
 
-    APP_LOGI("heap", "sram2 total=%u used=%u free=%u peak=%u min=%u",
-             (unsigned int)configTOTAL_HEAP_SIZE,
-             (unsigned int)used_now,
-             (unsigned int)free_now,
-             (unsigned int)peak_used,
-             (unsigned int)min_free);
+static bool calibration_settings_active(void)
+{
+    return g_calibration_page != CALIBRATION_PAGE_NONE;
+}
+
+static void get_active_calibration_offsets(CalibrationOffsets* offsets)
+{
+    if (offsets == 0)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    *offsets = calibration_settings_active() ? g_calibration_edit_offsets : g_calibration_offsets;
+    taskEXIT_CRITICAL();
+}
+
+static void apply_orientation_offsets(OrientationData* data)
+{
+    CalibrationOffsets offsets;
+    int32_t pitch_cd;
+    int32_t yaw_cd;
+
+    if (data == 0)
+    {
+        return;
+    }
+
+    get_active_calibration_offsets(&offsets);
+    pitch_cd = -(int32_t)data->pitch_cd + ((int32_t)offsets.pitch_install_tenth_deg * 10);
+    yaw_cd = -(int32_t)data->yaw_cd +
+             ((int32_t)(offsets.yaw_install_tenth_deg + offsets.yaw_error_tenth_deg) * 10);
+
+    if (pitch_cd > INT16_MAX)
+    {
+        pitch_cd = INT16_MAX;
+    }
+    else if (pitch_cd < INT16_MIN)
+    {
+        pitch_cd = INT16_MIN;
+    }
+
+    data->pitch_cd = (int16_t)pitch_cd;
+    data->yaw_cd = (int16_t)normalize_yaw_centidegree(yaw_cd);
+}
+
+static bool mode_uses_multifunction(AppWorkMode mode)
+{
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    return (mode == APP_MODE_MULTI) || (mode == APP_MODE_WORK_TIME_TEST);
+#else
+    return mode == APP_MODE_MULTI;
+#endif
 }
 
 static void range_cycle_reset(void);
@@ -93,7 +170,6 @@ static void range_power_set(bool enabled)
     {
         BspUart_Reinit(BSP_UART_RANGE);
         Board_SetRangePower(true);
-        vTaskDelay(pdMS_TO_TICKS(APP_RANGE_POWER_ON_MS));
         BspUart_FlushRx(BSP_UART_RANGE);
         Rangefinder_Reset();
     }
@@ -124,18 +200,22 @@ static void imu_power_set(bool enabled)
 
     if (enabled)
     {
+        AppState_ClearOrientation();
         BspUart_Reinit(BSP_UART_IMU);
         Board_SetImuPower(true);
-        vTaskDelay(pdMS_TO_TICKS(APP_IMU_POWER_ON_MS));
         BspUart_FlushRx(BSP_UART_IMU);
         Jy901b_Reset();
+        AppState_ClearOrientation();
+        g_imu_powered = true;
     }
     else
     {
+        g_imu_powered = false;
         Board_SetImuPower(false);
+        BspUart_FlushRx(BSP_UART_IMU);
+        Jy901b_Reset();
+        AppState_ClearOrientation();
     }
-
-    g_imu_powered = enabled;
 }
 
 static void gnss_power_set(bool enabled)
@@ -147,18 +227,22 @@ static void gnss_power_set(bool enabled)
 
     if (enabled)
     {
+        AppState_ClearGnss();
         BspUart_Reinit(BSP_UART_GNSS);
         Board_SetGnssPower(true);
-        vTaskDelay(pdMS_TO_TICKS(APP_GNSS_POWER_ON_MS));
         BspUart_FlushRx(BSP_UART_GNSS);
         Bv220_Reset();
+        AppState_ClearGnss();
+        g_gnss_powered = true;
     }
     else
     {
+        g_gnss_powered = false;
         Board_SetGnssPower(false);
+        BspUart_FlushRx(BSP_UART_GNSS);
+        Bv220_Reset();
+        AppState_ClearGnss();
     }
-
-    g_gnss_powered = enabled;
 }
 
 static void modules_off_for_sleep(void)
@@ -171,8 +255,8 @@ static void modules_off_for_sleep(void)
 static void apply_mode_power(AppWorkMode mode)
 {
     range_power_set(false);
-    imu_power_set(mode == APP_MODE_MULTI);
-    gnss_power_set(mode == APP_MODE_MULTI);
+    imu_power_set(mode_uses_multifunction(mode));
+    gnss_power_set(mode_uses_multifunction(mode));
 }
 
 static void finish_measurement_power(void)
@@ -183,14 +267,11 @@ static void finish_measurement_power(void)
 static void range_cycle_reset(void)
 {
     g_range_cycle_active = false;
-    g_range_cycle_got_any = false;
-    g_range_cycle_has_single = false;
     g_range_cycle_has_first = false;
     g_range_cycle_has_last = false;
     g_range_cycle_last_index = 0U;
     g_range_cycle_max_index = 0U;
     g_range_cycle_last_rx_ms = 0U;
-    g_range_cycle_single_mm = 0U;
     g_range_cycle_first_mm = 0U;
     g_range_cycle_last_mm = 0U;
     g_range_cycle_last_status = 0U;
@@ -198,12 +279,6 @@ static void range_cycle_reset(void)
     g_range_frames_since_start = 0U;
     g_range_command_ack_received = false;
     g_range_last_ack_command = 0U;
-}
-
-static void stop_continuous_test(void)
-{
-    g_continuous_test_active = false;
-    finish_measurement_power();
 }
 
 static bool wait_range_ack(uint8_t command, uint32_t timeout_ms)
@@ -229,13 +304,11 @@ static void publish_range_result(uint32_t now_ms)
     result.valid = true;
     result.command = g_continuous_started ? 0x04U : 0x02U;
     result.distance_mm = g_range_cycle_has_first ? g_range_cycle_first_mm :
-        (g_range_cycle_has_single ? g_range_cycle_single_mm :
-         (g_range_cycle_has_last ? g_range_cycle_last_mm : 0U));
+        (g_range_cycle_has_last ? g_range_cycle_last_mm : 0U);
     result.first_distance_mm = g_range_cycle_first_mm;
     result.last_distance_mm = g_range_cycle_last_mm;
     result.status = g_range_cycle_last_status;
     result.target_index = 0U;
-    result.target_valid = g_range_cycle_got_any;
     result.first_valid = g_range_cycle_has_first;
     result.last_valid = g_range_cycle_has_last;
     result.self_status[0] = 0U;
@@ -251,42 +324,6 @@ static void publish_range_result(uint32_t now_ms)
     AppState_SetMeasureCount(MeasureCounter_Increment());
     ++g_continuous_sample_count;
 
-    if (result.first_valid && result.last_valid)
-    {
-        APP_LOGI("range", "mode=%u count=%u first=%u last=%u",
-                 (unsigned int)g_measure_mode,
-                 (unsigned int)MeasureCounter_Get(),
-                 (unsigned int)result.first_distance_mm,
-                 (unsigned int)result.last_distance_mm);
-    }
-    else if (result.first_valid)
-    {
-        APP_LOGI("range", "mode=%u count=%u first=%u",
-                 (unsigned int)g_measure_mode,
-                 (unsigned int)MeasureCounter_Get(),
-                 (unsigned int)result.first_distance_mm);
-    }
-    else if (result.last_valid)
-    {
-        APP_LOGI("range", "mode=%u count=%u last=%u",
-                 (unsigned int)g_measure_mode,
-                 (unsigned int)MeasureCounter_Get(),
-                 (unsigned int)result.last_distance_mm);
-    }
-    else if (result.target_valid)
-    {
-        APP_LOGI("range", "mode=%u count=%u dist=%u",
-                 (unsigned int)g_measure_mode,
-                 (unsigned int)MeasureCounter_Get(),
-                 (unsigned int)result.distance_mm);
-    }
-    else
-    {
-        APP_LOGI("range", "mode=%u count=%u no target status=0x%02X",
-                 (unsigned int)g_measure_mode,
-                 (unsigned int)MeasureCounter_Get(),
-                 (unsigned int)result.status);
-    }
     range_cycle_reset();
 }
 
@@ -313,12 +350,11 @@ static void update_range_cycle(const RangefinderData* data, uint32_t now_ms)
     g_range_cycle_last_index = data->target_index;
     g_range_cycle_last_status = data->status;
 
-    if (!data->target_valid)
+    if ((!data->first_valid) && (!data->last_valid))
     {
         return;
     }
 
-    g_range_cycle_got_any = true;
     if (data->first_valid && (!g_range_cycle_has_first))
     {
         g_range_cycle_has_first = true;
@@ -331,12 +367,6 @@ static void update_range_cycle(const RangefinderData* data, uint32_t now_ms)
         g_range_cycle_has_last = true;
         g_range_cycle_max_index = data->target_index;
         g_range_cycle_last_mm = data->distance_mm;
-    }
-
-    if ((!data->first_valid) && (!data->last_valid))
-    {
-        g_range_cycle_has_single = true;
-        g_range_cycle_single_mm = data->distance_mm;
     }
 }
 
@@ -384,25 +414,17 @@ static void update_imu_from_uart(uint32_t now_ms)
 {
     uint8_t byte;
     OrientationData data;
-    static uint32_t last_log_ms;
-
     while (BspUart_ReadByte(BSP_UART_IMU, &byte))
     {
         if (Jy901b_ProcessByte(byte, &data))
         {
+            if (!g_imu_powered)
+            {
+                continue;
+            }
+            apply_orientation_offsets(&data);
             data.update_ms = now_ms;
             AppState_UpdateOrientation(&data);
-            if ((now_ms - last_log_ms) >= 1000U)
-            {
-                last_log_ms = now_ms;
-                APP_LOGI("att", "yaw=%d.%02d pitch=%d.%02d roll=%d.%02d",
-                         data.yaw_cd / 100,
-                         (data.yaw_cd < 0) ? (-(data.yaw_cd % 100)) : (data.yaw_cd % 100),
-                         data.pitch_cd / 100,
-                         (data.pitch_cd < 0) ? (-(data.pitch_cd % 100)) : (data.pitch_cd % 100),
-                         data.roll_cd / 100,
-                         (data.roll_cd < 0) ? (-(data.roll_cd % 100)) : (data.roll_cd % 100));
-            }
         }
     }
 }
@@ -411,26 +433,16 @@ static void update_gnss_from_uart(uint32_t now_ms)
 {
     uint8_t byte;
     GnssData data;
-    static uint32_t last_log_ms;
-
     while (BspUart_ReadByte(BSP_UART_GNSS, &byte))
     {
         if (Bv220_ProcessByte(byte, &data))
         {
+            if (!g_gnss_powered)
+            {
+                continue;
+            }
             data.update_ms = now_ms;
             AppState_UpdateGnss(&data);
-            if ((now_ms - last_log_ms) >= 2000U)
-            {
-                last_log_ms = now_ms;
-                if (data.fix)
-                {
-                    APP_LOGI("coord", "local lat=%d lon=%d alt=%dcm sats=%u",
-                             (int)data.latitude_e7,
-                             (int)data.longitude_e7,
-                             (int)data.altitude_cm,
-                             data.satellites);
-                }
-            }
         }
     }
 }
@@ -460,8 +472,11 @@ static void handle_mode_key(void)
     AppWorkMode mode;
 
     mode = AppState_GetMode();
+#if APP_WORK_TIME_TEST_MODE_ENABLE
     mode = (AppWorkMode)(((uint32_t)mode + 1U) % (uint32_t)APP_MODE_COUNT);
-    g_continuous_test_active = false;
+#else
+    mode = (mode >= APP_MODE_MULTI) ? APP_MODE_SINGLE : (AppWorkMode)((uint32_t)mode + 1U);
+#endif
     AppState_SetMode(mode);
     AppState_ClearRange();
     apply_mode_power(mode);
@@ -471,12 +486,241 @@ static void clear_measure_count(void)
 {
     MeasureCounter_Reset();
     AppState_SetMeasureCount(MeasureCounter_Get());
-    APP_LOGI("control", "measure count cleared");
+}
+
+static void reset_calibration_key_state(void)
+{
+    g_calibration_power_hold_ms = 0U;
+    g_calibration_mode_hold_ms = 0U;
+    g_calibration_power_repeat_ms = 0U;
+    g_calibration_mode_repeat_ms = 0U;
+    g_calibration_both_hold_ms = 0U;
+    g_calibration_power_repeated = false;
+    g_calibration_mode_repeated = false;
+    g_calibration_both_active = false;
+    g_calibration_wait_release = false;
+}
+
+static void enter_calibration_settings(void)
+{
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    g_work_time_test_active = false;
+#endif
+    AppState_ClearRange();
+    range_power_set(false);
+    gnss_power_set(false);
+    imu_power_set(true);
+
+    taskENTER_CRITICAL();
+    g_calibration_edit_offsets = g_calibration_offsets;
+    g_calibration_page = CALIBRATION_PAGE_PITCH_INSTALL;
+    taskEXIT_CRITICAL();
+
+    reset_calibration_key_state();
+}
+
+static void leave_calibration_settings(void)
+{
+    taskENTER_CRITICAL();
+    g_calibration_page = CALIBRATION_PAGE_NONE;
+    taskEXIT_CRITICAL();
+    reset_calibration_key_state();
+    AppState_ClearOrientation();
+    apply_mode_power(AppState_GetMode());
+}
+
+static void save_calibration_settings(void)
+{
+    CalibrationOffsets offsets;
+
+    taskENTER_CRITICAL();
+    offsets = g_calibration_edit_offsets;
+    taskEXIT_CRITICAL();
+
+    if (!MeasureCounter_SaveCalibration(&offsets))
+    {
+        APP_LOGE("cal", "failed to save angle offsets");
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    g_calibration_offsets = offsets;
+    taskEXIT_CRITICAL();
+    leave_calibration_settings();
+}
+
+static void next_calibration_page(void)
+{
+    taskENTER_CRITICAL();
+    if ((g_calibration_page >= CALIBRATION_PAGE_PITCH_INSTALL) &&
+        (g_calibration_page < CALIBRATION_PAGE_SAVE))
+    {
+        g_calibration_page = (CalibrationPage)((uint32_t)g_calibration_page + 1U);
+    }
+    else
+    {
+        g_calibration_page = CALIBRATION_PAGE_PITCH_INSTALL;
+    }
+    taskEXIT_CRITICAL();
+}
+
+static void adjust_calibration_value(int16_t delta)
+{
+    int16_t* value = 0;
+    int16_t minimum = 0;
+    int16_t maximum = 0;
+    int32_t adjusted;
+
+    taskENTER_CRITICAL();
+    switch (g_calibration_page)
+    {
+    case CALIBRATION_PAGE_PITCH_INSTALL:
+        value = &g_calibration_edit_offsets.pitch_install_tenth_deg;
+        minimum = -900;
+        maximum = 900;
+        break;
+    case CALIBRATION_PAGE_YAW_INSTALL:
+        value = &g_calibration_edit_offsets.yaw_install_tenth_deg;
+        minimum = -1800;
+        maximum = 1800;
+        break;
+    case CALIBRATION_PAGE_YAW_ERROR:
+        value = &g_calibration_edit_offsets.yaw_error_tenth_deg;
+        minimum = -1800;
+        maximum = 1800;
+        break;
+    default:
+        break;
+    }
+
+    if (value != 0)
+    {
+        adjusted = (int32_t)*value + delta;
+        if (adjusted < minimum)
+        {
+            adjusted = minimum;
+        }
+        else if (adjusted > maximum)
+        {
+            adjusted = maximum;
+        }
+        *value = (int16_t)adjusted;
+    }
+    taskEXIT_CRITICAL();
+}
+
+static void handle_calibration_settings_input(KeyEvent event, uint32_t now_ms)
+{
+    const bool power_pressed = Keys_IsPowerPressed();
+    const bool mode_pressed = Keys_IsModePressed();
+    const CalibrationPage page = g_calibration_page;
+
+    if (g_calibration_wait_release)
+    {
+        if ((!power_pressed) && (!mode_pressed))
+        {
+            reset_calibration_key_state();
+        }
+        return;
+    }
+
+    if (g_calibration_both_active)
+    {
+        if (power_pressed && mode_pressed)
+        {
+            if ((now_ms - g_calibration_both_hold_ms) >= APP_CALIBRATION_NEXT_PAGE_MS)
+            {
+                next_calibration_page();
+                g_calibration_both_active = false;
+                g_calibration_wait_release = true;
+            }
+        }
+        else
+        {
+            g_calibration_both_active = false;
+            g_calibration_wait_release = true;
+        }
+        return;
+    }
+
+    if (power_pressed && mode_pressed)
+    {
+        g_calibration_both_active = true;
+        g_calibration_both_hold_ms = now_ms;
+        g_calibration_power_repeated = true;
+        g_calibration_mode_repeated = true;
+        return;
+    }
+
+    if (page == CALIBRATION_PAGE_SAVE)
+    {
+        if (event == KEY_EVENT_POWER_SHORT)
+        {
+            save_calibration_settings();
+        }
+        else if (event == KEY_EVENT_MODE_SHORT)
+        {
+            leave_calibration_settings();
+        }
+        return;
+    }
+
+    if ((event == KEY_EVENT_POWER_SHORT) && (!g_calibration_power_repeated))
+    {
+        adjust_calibration_value(1);
+    }
+    else if ((event == KEY_EVENT_MODE_SHORT) && (!g_calibration_mode_repeated))
+    {
+        adjust_calibration_value(-1);
+    }
+
+    if (power_pressed)
+    {
+        if (g_calibration_power_hold_ms == 0U)
+        {
+            g_calibration_power_hold_ms = now_ms;
+            g_calibration_power_repeat_ms = now_ms;
+        }
+        else if (((now_ms - g_calibration_power_hold_ms) >= APP_CALIBRATION_HOLD_START_MS) &&
+                 ((now_ms - g_calibration_power_repeat_ms) >= APP_CALIBRATION_REPEAT_MS))
+        {
+            adjust_calibration_value(1);
+            g_calibration_power_repeat_ms = now_ms;
+            g_calibration_power_repeated = true;
+        }
+    }
+    else
+    {
+        g_calibration_power_hold_ms = 0U;
+        g_calibration_power_repeat_ms = 0U;
+        g_calibration_power_repeated = false;
+    }
+
+    if (mode_pressed)
+    {
+        if (g_calibration_mode_hold_ms == 0U)
+        {
+            g_calibration_mode_hold_ms = now_ms;
+            g_calibration_mode_repeat_ms = now_ms;
+        }
+        else if (((now_ms - g_calibration_mode_hold_ms) >= APP_CALIBRATION_HOLD_START_MS) &&
+                 ((now_ms - g_calibration_mode_repeat_ms) >= APP_CALIBRATION_REPEAT_MS))
+        {
+            adjust_calibration_value(-1);
+            g_calibration_mode_repeat_ms = now_ms;
+            g_calibration_mode_repeated = true;
+        }
+    }
+    else
+    {
+        g_calibration_mode_hold_ms = 0U;
+        g_calibration_mode_repeat_ms = 0U;
+        g_calibration_mode_repeated = false;
+    }
 }
 
 static void enter_imu_calibration_power(void)
 {
-    g_continuous_test_active = false;
     AppState_ClearRange();
     range_power_set(false);
     gnss_power_set(false);
@@ -490,51 +734,87 @@ static void leave_imu_calibration_power(void)
     apply_mode_power(AppState_GetMode());
 }
 
-static void calibrate_imu_acc_gyro(void)
+static void calibrate_imu_accelerometer(void)
 {
-    APP_LOGI("cal", "acc gyro start");
+    bool ok;
+
     enter_imu_calibration_power();
-    g_display_calibration_prompt = true;
-    Jy901b_CalibrateAccGyro();
-    g_display_calibration_prompt = false;
+    g_lcd_calibration_prompt = true;
+    ok = Jy901b_CalibrateAccelerometer();
+    g_lcd_calibration_prompt = false;
     leave_imu_calibration_power();
-    APP_LOGI("cal", "acc gyro done");
+    if (!ok)
+    {
+        APP_LOGE("cal", "accelerometer command failed");
+    }
 }
 
 static void calibrate_imu_ref_angle(void)
 {
-    APP_LOGI("cal", "ref angle start");
+    bool ok;
+
     enter_imu_calibration_power();
-    g_display_calibration_prompt = true;
-    Jy901b_CalibrateRefAngle();
-    g_display_calibration_prompt = false;
+    g_lcd_calibration_prompt = true;
+    ok = Jy901b_CalibrateRefAngle();
+    g_lcd_calibration_prompt = false;
     leave_imu_calibration_power();
-    APP_LOGI("cal", "ref angle done");
+    if (!ok)
+    {
+        APP_LOGE("cal", "ref angle command failed");
+    }
 }
 
 static void start_imu_mag_calibration(void)
 {
-    APP_LOGI("cal", "mag start");
     enter_imu_calibration_power();
-    g_display_calibration_prompt = true;
-    Jy901b_StartMagCalibration();
+    g_lcd_calibration_prompt = true;
+    if (Jy901b_StartMagCalibration())
+    {
+        g_imu_mag_calibration_active = true;
+        APP_LOGI("cal", "mag calibration started");
+    }
+    else
+    {
+        g_lcd_calibration_prompt = false;
+        leave_imu_calibration_power();
+        APP_LOGE("cal", "mag start command failed");
+    }
 }
 
 static void stop_imu_mag_calibration(void)
 {
-    APP_LOGI("cal", "mag stop");
-    if (!g_imu_calibration_powered)
+    bool ok;
+
+    if (!g_imu_mag_calibration_active)
     {
-        enter_imu_calibration_power();
+        return;
     }
-    Jy901b_StopMagCalibration();
-    g_display_calibration_prompt = false;
+
+    ok = Jy901b_StopMagCalibration();
+    g_imu_mag_calibration_active = false;
+    g_lcd_calibration_prompt = false;
     leave_imu_calibration_power();
-    APP_LOGI("cal", "mag done");
+    if (!ok)
+    {
+        APP_LOGE("cal", "mag stop command failed");
+    }
+    else
+    {
+        APP_LOGI("cal", "mag calibration stopped, save command sent");
+    }
 }
 
 static void handle_mode_click_count(uint8_t count)
 {
+    if (g_imu_mag_calibration_active)
+    {
+        if (count == 8U)
+        {
+            stop_imu_mag_calibration();
+        }
+        return;
+    }
+
     switch (count)
     {
     case 1U:
@@ -544,7 +824,10 @@ static void handle_mode_click_count(uint8_t count)
         clear_measure_count();
         break;
     case 5U:
-        calibrate_imu_acc_gyro();
+        calibrate_imu_accelerometer();
+        break;
+    case 4U:
+        enter_calibration_settings();
         break;
     case 6U:
         calibrate_imu_ref_angle();
@@ -562,6 +845,12 @@ static void handle_mode_click_count(uint8_t count)
 
 static void note_mode_short_click(uint32_t now_ms)
 {
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    if (g_work_time_test_active)
+    {
+        return;
+    }
+#endif
     if ((g_mode_click_count == 0U) ||
         ((now_ms - g_mode_click_last_ms) > APP_MODE_MULTI_CLICK_MS))
     {
@@ -596,7 +885,7 @@ static void start_measurement(AppWorkMode mode)
     range_cycle_reset();
     AppState_ClearRange();
 
-    if (mode == APP_MODE_MULTI)
+    if (mode_uses_multifunction(mode))
     {
         imu_power_set(true);
         gnss_power_set(true);
@@ -611,14 +900,6 @@ static void start_measurement(AppWorkMode mode)
 
     if (mode == APP_MODE_CONTINUOUS)
     {
-#if APP_CONTINUOUS_RANGE_TEST_ENABLE
-        g_range_last_ack_command = 0U;
-        Rangefinder_SetTargetMode(RANGE_TARGET_MULTI);
-        (void)wait_range_ack(0x03U, APP_RANGE_COMMAND_ACK_TIMEOUT_MS);
-        g_measure_start_ms = tick_ms();
-        g_range_last_ack_command = 0U;
-        Rangefinder_StartSingle();
-#else
         g_continuous_started = true;
         g_range_last_ack_command = 0U;
         Rangefinder_SetContinuousRate(RANGE_RATE_1HZ);
@@ -629,7 +910,6 @@ static void start_measurement(AppWorkMode mode)
         g_measure_start_ms = tick_ms();
         g_range_last_ack_command = 0U;
         Rangefinder_StartContinuous();
-#endif
     }
     else
     {
@@ -646,6 +926,28 @@ static void handle_power_short(void)
 {
     const AppWorkMode mode = AppState_GetMode();
 
+    if (g_imu_mag_calibration_active)
+    {
+        return;
+    }
+
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    if (mode == APP_MODE_WORK_TIME_TEST)
+    {
+        if (g_work_time_test_active)
+        {
+            g_work_time_test_active = false;
+            range_power_set(false);
+        }
+        else
+        {
+            g_work_time_test_active = true;
+            g_work_time_test_next_ms = tick_ms();
+        }
+        return;
+    }
+#endif
+
     if ((mode == APP_MODE_CONTINUOUS) && g_continuous_started)
     {
         range_power_set(false);
@@ -654,17 +956,6 @@ static void handle_power_short(void)
 
     if (mode == APP_MODE_CONTINUOUS)
     {
-#if APP_CONTINUOUS_RANGE_TEST_ENABLE
-        if (g_continuous_test_active)
-        {
-            stop_continuous_test();
-        }
-        else
-        {
-            g_continuous_test_active = true;
-            g_continuous_test_next_ms = tick_ms();
-        }
-#else
         if (g_measure_pending || g_range_powered)
         {
             range_power_set(false);
@@ -673,18 +964,24 @@ static void handle_power_short(void)
         {
             start_measurement(APP_MODE_CONTINUOUS);
         }
-#endif
         return;
     }
 
     start_measurement(mode);
 }
 
-static void power_off_sequence(void)
+static void power_off_sequence(bool save_measure_count)
 {
-    g_continuous_test_active = false;
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    g_work_time_test_active = false;
+#endif
+    g_imu_mag_calibration_active = false;
+    g_lcd_calibration_prompt = false;
     modules_off_for_sleep();
-    Board_SetDisplayPower(false);
+    if (save_measure_count && !MeasureCounter_Save())
+    {
+        APP_LOGE("counter", "failed to save measure count");
+    }
     Board_PowerHold(false);
 }
 
@@ -695,9 +992,9 @@ static bool battery_low_voltage(const BatteryData* battery)
            (battery->voltage_mv < APP_BAT_EMPTY_MV);
 }
 
-static void power_off_wait_forever(void)
+static void power_off_wait_forever(bool save_measure_count)
 {
-    power_off_sequence();
+    power_off_sequence(save_measure_count);
     while (1)
     {
         vTaskDelay(pdMS_TO_TICKS(1000U));
@@ -715,33 +1012,26 @@ static void power_off_if_battery_low(const char* module, const BatteryData* batt
              "battery low %u mV < %u mV, power off",
              (unsigned int)battery->voltage_mv,
              (unsigned int)APP_BAT_EMPTY_MV);
-    power_off_wait_forever();
+    power_off_wait_forever(false);
 }
 
-static void update_continuous_test(uint32_t now_ms)
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+static void update_work_time_test(uint32_t now_ms)
 {
-    if (!APP_CONTINUOUS_RANGE_TEST_ENABLE)
-    {
-        (void)now_ms;
-        return;
-    }
-
-    if ((!g_continuous_test_active) || (AppState_GetMode() != APP_MODE_CONTINUOUS))
+    if ((!g_work_time_test_active) ||
+        (AppState_GetMode() != APP_MODE_WORK_TIME_TEST) ||
+        g_measure_pending || g_range_powered)
     {
         return;
     }
 
-    if (g_measure_pending || g_range_powered)
+    if ((int32_t)(now_ms - g_work_time_test_next_ms) >= 0)
     {
-        return;
-    }
-
-    if ((int32_t)(now_ms - g_continuous_test_next_ms) >= 0)
-    {
-        start_measurement(APP_MODE_CONTINUOUS);
-        g_continuous_test_next_ms = now_ms + APP_CONTINUOUS_TEST_INTERVAL_MS;
+        g_work_time_test_next_ms = now_ms + APP_WORK_TIME_TEST_INTERVAL_MS;
+        start_measurement(APP_MODE_WORK_TIME_TEST);
     }
 }
+#endif
 
 static void close_measurement_if_done(uint32_t now_ms)
 {
@@ -769,7 +1059,6 @@ static void close_measurement_if_done(uint32_t now_ms)
                 }
                 else
                 {
-                    APP_LOGI("range", "continuous no target");
                 }
                 publish_range_result(now_ms);
             }
@@ -791,7 +1080,7 @@ static void close_measurement_if_done(uint32_t now_ms)
     }
     else
     {
-        const uint32_t timeout_ms = (g_measure_mode == APP_MODE_MULTI) ?
+        const uint32_t timeout_ms = mode_uses_multifunction(g_measure_mode) ?
             APP_MULTI_MEASURE_TIMEOUT_MS : APP_RANGE_SINGLE_TIMEOUT_MS;
 
         if ((now_ms - g_measure_start_ms) >= timeout_ms)
@@ -801,14 +1090,12 @@ static void close_measurement_if_done(uint32_t now_ms)
             if (!g_range_command_ack_received)
             {
                 APP_LOGW("control", "%s range timeout, rx_bytes=%u frames=%u",
-                         (finished_mode == APP_MODE_MULTI) ? "multi" : "single",
+                         mode_uses_multifunction(finished_mode) ? "multi" : "single",
                          (unsigned int)g_range_rx_bytes_since_start,
                          (unsigned int)g_range_frames_since_start);
             }
             else
             {
-                APP_LOGI("range", "%s no target",
-                         (finished_mode == APP_MODE_MULTI) ? "multi" : "single");
             }
             publish_range_result(now_ms);
             finish_measurement_power();
@@ -827,8 +1114,6 @@ static void control_task(void* argument)
     (void)argument;
     Keys_Init();
     apply_mode_power(AppState_GetMode());
-    vTaskDelay(pdMS_TO_TICKS(1U));
-    log_sram2_heap_once();
 
     while (1)
     {
@@ -842,22 +1127,37 @@ static void control_task(void* argument)
         }
 #endif
 
-        if (event == KEY_EVENT_MODE_SHORT)
+        if (calibration_settings_active())
         {
-            note_mode_short_click(now_ms);
+            handle_calibration_settings_input(event, now_ms);
         }
-        else if (event == KEY_EVENT_POWER_SHORT)
+        else
         {
-            handle_power_short();
-        }
-        else if (event == KEY_EVENT_POWER_LONG)
-        {
-            power_off_wait_forever();
+            if (event == KEY_EVENT_MODE_SHORT)
+            {
+                note_mode_short_click(now_ms);
+            }
+            else if (event == KEY_EVENT_POWER_SHORT)
+            {
+                handle_power_short();
+            }
+            else if (event == KEY_EVENT_POWER_LONG)
+            {
+                power_off_wait_forever(true);
+            }
         }
 
-        update_continuous_test(tick_ms());
         close_measurement_if_done(tick_ms());
-        close_mode_click_window(tick_ms());
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+        if (!calibration_settings_active())
+        {
+            update_work_time_test(tick_ms());
+        }
+#endif
+        if (!calibration_settings_active())
+        {
+            close_mode_click_window(tick_ms());
+        }
 
         if ((now_ms - last_battery_ms) >= 1000U)
         {
@@ -868,9 +1168,13 @@ static void control_task(void* argument)
         }
 
 #if APP_AUTO_POWER_OFF_ENABLE
-        if ((now_ms - last_activity_ms) >= APP_AUTO_POWER_OFF_MS)
+        if (
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+            (!g_work_time_test_active) &&
+#endif
+            ((now_ms - last_activity_ms) >= APP_AUTO_POWER_OFF_MS))
         {
-            power_off_wait_forever();
+            power_off_wait_forever(true);
         }
 #endif
 
@@ -900,6 +1204,139 @@ static void display_number_fixed(const uint8_t* digit_ids, uint8_t digit_count, 
     }
 }
 
+static void display_calibration_label(const uint8_t* digit_ids, CalibrationPage page)
+{
+    const char* label = "   ";
+
+    switch (page)
+    {
+    case CALIBRATION_PAGE_PITCH_INSTALL:
+        label = "PIt";
+        break;
+    case CALIBRATION_PAGE_YAW_INSTALL:
+        label = "HIt";
+        break;
+    case CALIBRATION_PAGE_YAW_ERROR:
+        label = "HEr";
+        break;
+    default:
+        break;
+    }
+
+    for (uint8_t i = 0U; i < 3U; ++i)
+    {
+        DisplayOutput_SetChar(digit_ids[i], label[i]);
+    }
+}
+
+static void display_calibration_save(const uint8_t* digit_ids)
+{
+    static const char label[] = "SAVE";
+
+    for (uint8_t i = 0U; i < 4U; ++i)
+    {
+        DisplayOutput_SetChar(digit_ids[i], label[i]);
+    }
+}
+
+static void display_calibration_live_angle(const uint8_t* digit_ids,
+                                           CalibrationPage page,
+                                           const OrientationData* orientation)
+{
+    int32_t tenths;
+
+    if ((orientation == 0) || (!orientation->valid))
+    {
+        display_dash_digits(digit_ids, 4U);
+        return;
+    }
+
+    if (page == CALIBRATION_PAGE_PITCH_INSTALL)
+    {
+        tenths = orientation->pitch_cd / 10;
+        if (tenths < -999)
+        {
+            tenths = -999;
+        }
+        else if (tenths > 9999)
+        {
+            tenths = 9999;
+        }
+
+        if (tenths < 0)
+        {
+            DisplayOutput_SetDash(digit_ids[0], true);
+            display_number_fixed(&digit_ids[1], 3U, (uint32_t)(-tenths));
+        }
+        else
+        {
+            DisplayOutput_SetNumberRightAligned(digit_ids, 4U, (uint32_t)tenths);
+        }
+    }
+    else
+    {
+        tenths = normalize_yaw_centidegree(orientation->yaw_cd);
+        if (tenths < 0)
+        {
+            tenths += 36000;
+        }
+        tenths /= 10;
+        DisplayOutput_SetNumberRightAligned(digit_ids, 4U, (uint32_t)tenths);
+    }
+}
+
+static void display_calibration_settings(const uint8_t* label_digits,
+                                         const uint8_t* live_angle_digits,
+                                         const uint8_t* value_digits,
+                                         const AppStateSnapshot* snapshot)
+{
+    CalibrationPage page;
+    CalibrationOffsets offsets;
+    int16_t value = 0;
+    uint32_t absolute;
+
+    taskENTER_CRITICAL();
+    page = g_calibration_page;
+    offsets = g_calibration_edit_offsets;
+    taskEXIT_CRITICAL();
+
+    DisplayOutput_ClearBuffer();
+    display_battery_symbols(snapshot->battery.level);
+    display_calibration_label(label_digits, page);
+
+    if (page == CALIBRATION_PAGE_SAVE)
+    {
+        display_calibration_save(live_angle_digits);
+        DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_FIRST_F, true);
+        DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_LAST_E, true);
+        return;
+    }
+
+    display_calibration_live_angle(live_angle_digits, page, &snapshot->orientation);
+
+    switch (page)
+    {
+    case CALIBRATION_PAGE_PITCH_INSTALL:
+        value = offsets.pitch_install_tenth_deg;
+        break;
+    case CALIBRATION_PAGE_YAW_INSTALL:
+        value = offsets.yaw_install_tenth_deg;
+        DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_SINGLE, true);
+        break;
+    case CALIBRATION_PAGE_YAW_ERROR:
+        value = offsets.yaw_error_tenth_deg;
+        DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_CONTINUOUS, true);
+        break;
+    default:
+        break;
+    }
+
+    DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_SIGN_MINUS, value < 0);
+    DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_SIGN_PLUS, value >= 0);
+    absolute = (uint32_t)((value < 0) ? -value : value);
+    DisplayOutput_SetNumberRightAligned(value_digits, 4U, absolute);
+}
+
 static void display_battery_symbols(uint8_t level)
 {
     static const DisplaySymbolId battery_symbols[] = {
@@ -919,6 +1356,56 @@ static void display_battery_symbols(uint8_t level)
     for (uint8_t i = 0U; i < (sizeof(battery_symbols) / sizeof(battery_symbols[0])); ++i)
     {
         DisplayOutput_SetSymbol((uint8_t)battery_symbols[i], i < level);
+    }
+}
+
+static void log_lcd_refresh_data(const char* view, const AppStateSnapshot* snapshot)
+{
+    if (snapshot == 0)
+    {
+        return;
+    }
+
+    if (snapshot->orientation.valid)
+    {
+        APP_LOGI("lcd",
+                 "%s mode=%u imu[r_cd=%d p_cd=%d y_cd=%d t=%u]",
+                 view,
+                 (unsigned int)snapshot->mode,
+                 (int)snapshot->orientation.roll_cd,
+                 (int)snapshot->orientation.pitch_cd,
+                 (int)snapshot->orientation.yaw_cd,
+                 (unsigned int)snapshot->orientation.update_ms);
+    }
+
+    if (snapshot->range.valid &&
+        (snapshot->range.first_valid || snapshot->range.last_valid))
+    {
+        APP_LOGI("lcd",
+                 "%s mode=%u range[cmd=0x%02X f=%u/%u l=%u/%u st=%u t=%u]",
+                 view,
+                 (unsigned int)snapshot->mode,
+                 (unsigned int)snapshot->range.command,
+                 snapshot->range.first_valid ? 1U : 0U,
+                 (unsigned int)snapshot->range.first_distance_mm,
+                 snapshot->range.last_valid ? 1U : 0U,
+                 (unsigned int)snapshot->range.last_distance_mm,
+                 (unsigned int)snapshot->range.status,
+                 (unsigned int)snapshot->range.update_ms);
+    }
+
+    if (snapshot->gnss.valid && snapshot->gnss.fix)
+    {
+        APP_LOGI("lcd",
+                 "%s mode=%u gps[fix=%u sat=%u lat_e7=%d lon_e7=%d alt_cm=%d t=%u]",
+                 view,
+                 (unsigned int)snapshot->mode,
+                 snapshot->gnss.fix ? 1U : 0U,
+                 (unsigned int)snapshot->gnss.satellites,
+                 (int)snapshot->gnss.latitude_e7,
+                 (int)snapshot->gnss.longitude_e7,
+                 (int)snapshot->gnss.altitude_cm,
+                 (unsigned int)snapshot->gnss.update_ms);
     }
 }
 
@@ -989,11 +1476,19 @@ static void display_direction_symbols(int32_t yaw_deg)
 
 static void display_mode_symbols(AppWorkMode mode)
 {
+    const bool multifunction_mode = mode_uses_multifunction(mode);
+#if APP_WORK_TIME_TEST_MODE_ENABLE
+    const bool work_time_test_mode = mode == APP_MODE_WORK_TIME_TEST;
+#else
+    const bool work_time_test_mode = false;
+#endif
+
     DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RETICLE, true);
     DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_UNIT_M, true);
     DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_SINGLE,
-                          (mode == APP_MODE_SINGLE) || (mode == APP_MODE_MULTI));
-    DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_CONTINUOUS, mode == APP_MODE_CONTINUOUS);
+                          (mode == APP_MODE_SINGLE) || multifunction_mode);
+    DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_RANGE_CONTINUOUS,
+                          (mode == APP_MODE_CONTINUOUS) || work_time_test_mode);
 }
 
 static double degrees_to_radians(double degrees)
@@ -1015,7 +1510,7 @@ static int32_t target_coordinate_e7(int32_t origin_e7,
 {
     const double lat1 = degrees_to_radians((double)(latitude ? origin_e7 : paired_origin_e7) / 10000000.0);
     const double lon1 = degrees_to_radians((double)(latitude ? paired_origin_e7 : origin_e7) / 10000000.0);
-    const double bearing = degrees_to_radians((double)normalize_degrees(yaw_cd / 100));
+    const double bearing = degrees_to_radians((double)yaw_cd / 100.0);
     const double pitch = degrees_to_radians((double)pitch_cd / 100.0);
     const double horizontal_m = ((double)distance_mm / 1000.0) * cos(pitch);
     const double angular_distance = horizontal_m / APP_EARTH_RADIUS_M;
@@ -1053,10 +1548,8 @@ typedef struct
     bool valid;
     bool first_valid;
     bool last_valid;
-    bool single_valid;
     DisplayTargetCoordinate first;
     DisplayTargetCoordinate last;
-    DisplayTargetCoordinate single;
 } DisplayTargetCache;
 
 static DisplayTargetCoordinate calculate_target_coordinate(const GnssData* gnss,
@@ -1119,6 +1612,7 @@ static void display_task(void* argument)
 {
     AppStateSnapshot snapshot;
     AppPowerMode last_power_mode = APP_POWER_FAULT;
+    AppWorkMode last_display_mode = APP_MODE_COUNT;
     DisplayTargetCache multi_target_cache = { 0 };
     static const uint8_t azimuth_digits[] = { 1U, 2U, 3U };
     static const uint8_t range_digits[] = { 4U, 5U, 6U, 7U };
@@ -1149,11 +1643,30 @@ static void display_task(void* argument)
         }
         last_power_mode = APP_POWER_RUN;
 
-        if (g_display_calibration_prompt)
+        if (snapshot.mode != last_display_mode)
+        {
+            multi_target_cache = (DisplayTargetCache){ 0 };
+            last_display_mode = snapshot.mode;
+        }
+
+        if (g_lcd_calibration_prompt)
         {
             DisplayOutput_SetAll(true);
             DisplayOutput_Flush();
+            log_lcd_refresh_data("imu_cal", &snapshot);
             vTaskDelay(pdMS_TO_TICKS(200U));
+            continue;
+        }
+
+        if (calibration_settings_active())
+        {
+            display_calibration_settings(azimuth_digits,
+                                         range_digits,
+                                         altitude_digits,
+                                         &snapshot);
+            DisplayOutput_Flush();
+            log_lcd_refresh_data("offset", &snapshot);
+            vTaskDelay(pdMS_TO_TICKS(100U));
             continue;
         }
 
@@ -1181,7 +1694,7 @@ static void display_task(void* argument)
             if (snapshot.range.first_valid && snapshot.range.last_valid)
             {
                 const uint32_t target_toggle_ms =
-                    (snapshot.mode == APP_MODE_MULTI) ? 2000U : 1000U;
+                    mode_uses_multifunction(snapshot.mode) ? 2000U : 1000U;
 
                 display_range_is_last =
                     ((snapshot.uptime_ms / target_toggle_ms) & 1U) != 0U;
@@ -1200,12 +1713,6 @@ static void display_task(void* argument)
                 display_range_is_last = true;
                 display_range_mm = snapshot.range.last_distance_mm;
             }
-            else if (snapshot.range.target_valid)
-            {
-                display_range_valid = true;
-                display_range_mm = snapshot.range.distance_mm;
-            }
-
             if (display_range_valid)
             {
                 DisplayOutput_SetNumberRightAligned(range_digits, sizeof(range_digits), display_range_mm / 1000U);
@@ -1222,16 +1729,14 @@ static void display_task(void* argument)
             display_dash_digits(range_digits, sizeof(range_digits));
         }
 
-        if (snapshot.mode == APP_MODE_MULTI)
+        if (mode_uses_multifunction(snapshot.mode))
         {
             if (range_result_current &&
                 ((!multi_target_cache.update_seen) ||
                  (snapshot.range.update_ms != multi_target_cache.update_ms)))
             {
                 const bool range_has_target =
-                    snapshot.range.target_valid ||
-                    snapshot.range.first_valid ||
-                    snapshot.range.last_valid;
+                    snapshot.range.first_valid || snapshot.range.last_valid;
 
                 multi_target_cache.update_seen = true;
                 multi_target_cache.update_ms = snapshot.range.update_ms;
@@ -1239,16 +1744,11 @@ static void display_task(void* argument)
                 multi_target_cache.valid = false;
                 multi_target_cache.first_valid = false;
                 multi_target_cache.last_valid = false;
-                multi_target_cache.single_valid = false;
 
                 if (range_has_target && snapshot.orientation.valid && snapshot.gnss.fix)
                 {
                     multi_target_cache.first_valid = snapshot.range.first_valid;
                     multi_target_cache.last_valid = snapshot.range.last_valid;
-                    multi_target_cache.single_valid =
-                        snapshot.range.target_valid &&
-                        (!snapshot.range.first_valid) &&
-                        (!snapshot.range.last_valid);
 
                     if (multi_target_cache.first_valid)
                     {
@@ -1266,18 +1766,9 @@ static void display_task(void* argument)
                                                         snapshot.range.last_distance_mm);
                     }
 
-                    if (multi_target_cache.single_valid)
-                    {
-                        multi_target_cache.single =
-                            calculate_target_coordinate(&snapshot.gnss,
-                                                        &snapshot.orientation,
-                                                        snapshot.range.distance_mm);
-                    }
-
                     multi_target_cache.valid =
                         multi_target_cache.first_valid ||
-                        multi_target_cache.last_valid ||
-                        multi_target_cache.single_valid;
+                        multi_target_cache.last_valid;
                 }
             }
         }
@@ -1289,7 +1780,7 @@ static void display_task(void* argument)
             multi_target_cache.update_ms = 0U;
         }
 
-        if (snapshot.mode == APP_MODE_MULTI)
+        if (mode_uses_multifunction(snapshot.mode))
         {
             const int32_t yaw_deg = snapshot.orientation.valid ?
                 normalize_degrees(snapshot.orientation.yaw_cd / 100) : 0;
@@ -1300,8 +1791,7 @@ static void display_task(void* argument)
             DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_DEG, true);
             DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_SIGN_MINUS,
                                   snapshot.orientation.valid && (pitch_deg < 0));
-            DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_SIGN_PLUS,
-                                  snapshot.orientation.valid && (pitch_deg >= 0));
+            DisplayOutput_SetSymbol((uint8_t)DISPLAY_SYMBOL_PITCH_SIGN_PLUS, false);
 
             if (pitch_deg < 0)
             {
@@ -1316,7 +1806,7 @@ static void display_task(void* argument)
             }
         }
 
-        if (snapshot.mode == APP_MODE_MULTI)
+        if (mode_uses_multifunction(snapshot.mode))
         {
             int32_t display_latitude = snapshot.gnss.latitude_e7;
             int32_t display_longitude = snapshot.gnss.longitude_e7;
@@ -1344,10 +1834,6 @@ static void display_task(void* argument)
                 {
                     coord_range_is_last = true;
                     display_target = &multi_target_cache.last;
-                }
-                else if (multi_target_cache.single_valid)
-                {
-                    display_target = &multi_target_cache.single;
                 }
             }
 
@@ -1397,26 +1883,11 @@ static void display_task(void* argument)
                                                   sizeof(altitude_digits),
                                                   (uint32_t)display_altitude_cm / 100U);
 
-                if (target_available)
-                {
-                    const uint8_t coord_log_state =
-                        (uint8_t)((coord_range_is_last ? 0x02U : 0x00U) |
-                                  (show_latitude ? 0x01U : 0x00U));
-
-                    if (coord_log_state != g_last_logged_target_coord)
-                    {
-                        g_last_logged_target_coord = coord_log_state;
-                        APP_LOGI("coord", "target %s %s=%d alt=%dcm",
-                                 coord_range_is_last ? "last" : "first",
-                                 show_latitude ? "lat" : "lon",
-                                 (int)(show_latitude ? display_latitude : display_longitude),
-                                 (int)display_altitude_cm);
-                    }
-                }
             }
         }
 
         DisplayOutput_Flush();
+        log_lcd_refresh_data("normal", &snapshot);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -1439,11 +1910,6 @@ static BaseType_t create_runtime_tasks(void)
         return pdFAIL;
     }
 
-    if (AppRunTimeStats_Start() != pdPASS)
-    {
-        return pdFAIL;
-    }
-
     return pdPASS;
 }
 
@@ -1455,22 +1921,19 @@ static void startup_task(void* argument)
 
     PowerManager_Init();
     MeasureCounter_Init();
+    MeasureCounter_GetCalibration(&g_calibration_offsets);
     AppState_SetMeasureCount(MeasureCounter_Get());
-    vTaskDelay(pdMS_TO_TICKS(APP_STARTUP_SETTLE_MS));
 
     Battery_Read(&battery);
     AppState_UpdateBattery(&battery);
     power_off_if_battery_low("startup", &battery);
 
-    APP_LOGI("startup", "module self-test start");
-
     if (!ModuleSelfTest_RunAll())
     {
         APP_LOGE("startup", "module self-test failed, power off");
-        power_off_wait_forever();
+        power_off_wait_forever(false);
     }
 
-    APP_LOGI("startup", "module self-test passed");
     if (create_runtime_tasks() != pdPASS)
     {
         APP_LOGE("startup", "failed to create runtime tasks");

@@ -167,10 +167,18 @@ static bool parse_payload(RangefinderData* data)
     range_status = (uint8_t)(data->status & 0x0FU);
     data->target_index = (uint8_t)(data->status >> 4U);
     meters = (uint16_t)(((uint16_t)g_payload[3] << 8U) | g_payload[4]);
-    data->target_valid = ((range_status <= 0x02U) && (meters != 0xFFFFU));
-    data->first_valid = data->target_valid && (range_status == 0x01U);
-    data->last_valid = data->target_valid && (range_status == 0x02U);
-    data->distance_mm = data->target_valid ?
+    const bool distance_valid = meters != 0xFFFFU;
+
+    /* A single target is presented as the first target. Status 0x03 returns
+     * multiple indexed distances: index 0 is first and the cycle aggregator
+     * keeps the highest index as last. */
+    data->first_valid = distance_valid &&
+                        ((range_status == 0x00U) ||
+                         (range_status == 0x01U) ||
+                         ((range_status == 0x03U) && (data->target_index == 0U)));
+    data->last_valid = distance_valid &&
+                       ((range_status == 0x02U) || (range_status == 0x03U));
+    data->distance_mm = (data->first_valid || data->last_valid) ?
         (((uint32_t)meters * 1000U) + ((uint32_t)g_payload[5] * 100U)) : 0U;
     data->continuous = (command == 0x04U);
     return true;

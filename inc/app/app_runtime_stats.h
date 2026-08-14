@@ -8,6 +8,5 @@
 
 void AppRunTimeStats_TimerInit(void);
 uint32_t AppRunTimeStats_GetCounter(void);
-BaseType_t AppRunTimeStats_Start(void);
 
 #endif /* APP_RUNTIME_STATS_H */

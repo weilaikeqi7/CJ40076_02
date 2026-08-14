@@ -27,7 +27,21 @@ static uint8_t encode_digit(int8_t digit)
         return 11U;
     }
 
-    return 0U;
+    switch ((char)digit)
+    {
+    case 'A': return 12U;
+    case 'C': return 13U;
+    case 'E': return 14U;
+    case 'H': return 15U;
+    case 'I': return 16U;
+    case 'P': return 17U;
+    case 'S': return 18U;
+    case 'V': return 19U;
+    case 'n': return 20U;
+    case 'r': return 21U;
+    case 't': return 22U;
+    default: return 0U;
+    }
 }
 
 void SerialDisplay_Init(void)
