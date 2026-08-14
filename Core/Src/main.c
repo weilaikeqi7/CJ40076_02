@@ -180,8 +180,8 @@ int main(void)
     Error_Handler();
   }
 
-  // 开机先显示全屏测试图案，确认 OLED 初始化和 QSPI 刷新正常
-  if (KA025VG_ShowFixedScreen() != HAL_OK)
+  // 开机先清屏黑屏，不显示任何元素，等待主控板传来状态数据后再渲染界面
+  if (KA025VG_Fill(0x00U) != HAL_OK)
   {
     Error_Handler();
   }

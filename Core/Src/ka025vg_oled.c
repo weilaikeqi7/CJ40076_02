@@ -403,6 +403,14 @@ HAL_StatusTypeDef KA025VG_Fill(uint8_t gray)
 #define REF_SYM_ELEVATION_LABEL_H 34U
 #define REF_SYM_ELEVATION_UNIT_M  35U
 
+#define REF_SEG_A (1U << 0U)
+#define REF_SEG_B (1U << 1U)
+#define REF_SEG_C (1U << 2U)
+#define REF_SEG_D (1U << 3U)
+#define REF_SEG_E (1U << 4U)
+#define REF_SEG_F (1U << 5U)
+#define REF_SEG_G (1U << 6U)
+
 typedef struct
 {
   int8_t digits[REF_CUSTOM_DISPLAY_DIGIT_COUNT];
@@ -445,6 +453,24 @@ static char REF_DigitToChar(const RefDisplayState *state, uint8_t digit_id)
     return '-';
   }
 
+  switch ((char)value)
+  {
+  case 'A':
+  case 'C':
+  case 'E':
+  case 'H':
+  case 'I':
+  case 'P':
+  case 'S':
+  case 'V':
+  case 'n':
+  case 'r':
+  case 't':
+    return (char)value;
+  default:
+    break;
+  }
+
   return ' ';
 }
 
@@ -474,11 +500,6 @@ static void REF_DrawRectangle(uint16_t addr_x, uint16_t addr_y, uint16_t width, 
   }
 }
 
-static void REF_DrawBar(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t bril)
-{
-  REF_DrawRectangle(x, y, h, w, bril);
-}
-
 static void REF_GlyphRows(char ch, uint8_t rows[7])
 {
   static const uint8_t blank[7] = {0U, 0U, 0U, 0U, 0U, 0U, 0U};
@@ -502,13 +523,18 @@ static void REF_GlyphRows(char ch, uint8_t rows[7])
   case 'E': { static const uint8_t r[7] = {31U, 16U, 16U, 30U, 16U, 16U, 31U}; src = r; break; }
   case 'F': { static const uint8_t r[7] = {31U, 16U, 16U, 30U, 16U, 16U, 16U}; src = r; break; }
   case 'H': { static const uint8_t r[7] = {17U, 17U, 17U, 31U, 17U, 17U, 17U}; src = r; break; }
+  case 'I': { static const uint8_t r[7] = {14U, 4U, 4U, 4U, 4U, 4U, 14U}; src = r; break; }
   case 'L': { static const uint8_t r[7] = {16U, 16U, 16U, 16U, 16U, 16U, 31U}; src = r; break; }
   case 'M': { static const uint8_t r[7] = {17U, 27U, 21U, 21U, 17U, 17U, 17U}; src = r; break; }
   case 'N': { static const uint8_t r[7] = {17U, 25U, 21U, 19U, 17U, 17U, 17U}; src = r; break; }
   case 'P': { static const uint8_t r[7] = {30U, 17U, 17U, 30U, 16U, 16U, 16U}; src = r; break; }
   case 'S': { static const uint8_t r[7] = {15U, 16U, 16U, 14U, 1U, 1U, 30U}; src = r; break; }
   case 'T': { static const uint8_t r[7] = {31U, 4U, 4U, 4U, 4U, 4U, 4U}; src = r; break; }
+  case 'V': { static const uint8_t r[7] = {17U, 17U, 17U, 17U, 17U, 10U, 4U}; src = r; break; }
   case 'W': { static const uint8_t r[7] = {17U, 17U, 17U, 21U, 21U, 21U, 10U}; src = r; break; }
+  case 'n': { static const uint8_t r[7] = {0U, 0U, 30U, 17U, 17U, 17U, 17U}; src = r; break; }
+  case 'r': { static const uint8_t r[7] = {0U, 0U, 22U, 25U, 16U, 16U, 16U}; src = r; break; }
+  case 't': { static const uint8_t r[7] = {8U, 8U, 30U, 8U, 8U, 9U, 6U}; src = r; break; }
   case '+': { static const uint8_t r[7] = {0U, 4U, 4U, 31U, 4U, 4U, 0U}; src = r; break; }
   case '-': src = dash; break;
   case '.': { static const uint8_t r[7] = {0U, 0U, 0U, 0U, 0U, 12U, 12U}; src = r; break; }
@@ -551,34 +577,195 @@ static void REF_DrawText(uint16_t x, uint16_t y, const char *text, uint8_t scale
   }
 }
 
+static uint8_t REF_SevenSegmentMask(char ch)
+{
+  static const uint8_t digit_masks[10] = {
+    REF_SEG_A | REF_SEG_B | REF_SEG_C | REF_SEG_D | REF_SEG_E | REF_SEG_F,
+    REF_SEG_B | REF_SEG_C,
+    REF_SEG_A | REF_SEG_B | REF_SEG_D | REF_SEG_E | REF_SEG_G,
+    REF_SEG_A | REF_SEG_B | REF_SEG_C | REF_SEG_D | REF_SEG_G,
+    REF_SEG_B | REF_SEG_C | REF_SEG_F | REF_SEG_G,
+    REF_SEG_A | REF_SEG_C | REF_SEG_D | REF_SEG_F | REF_SEG_G,
+    REF_SEG_A | REF_SEG_C | REF_SEG_D | REF_SEG_E | REF_SEG_F | REF_SEG_G,
+    REF_SEG_A | REF_SEG_B | REF_SEG_C,
+    REF_SEG_A | REF_SEG_B | REF_SEG_C | REF_SEG_D | REF_SEG_E | REF_SEG_F | REF_SEG_G,
+    REF_SEG_A | REF_SEG_B | REF_SEG_C | REF_SEG_D | REF_SEG_F | REF_SEG_G,
+  };
+
+  if ((ch >= '0') && (ch <= '9'))
+  {
+    return digit_masks[(uint8_t)(ch - '0')];
+  }
+
+  switch (ch)
+  {
+  case '-': return REF_SEG_G;
+  case 'A': return REF_SEG_A | REF_SEG_B | REF_SEG_C | REF_SEG_E | REF_SEG_F | REF_SEG_G;
+  case 'C': return REF_SEG_A | REF_SEG_D | REF_SEG_E | REF_SEG_F;
+  case 'E': return REF_SEG_A | REF_SEG_D | REF_SEG_E | REF_SEG_F | REF_SEG_G;
+  case 'H': return REF_SEG_B | REF_SEG_C | REF_SEG_E | REF_SEG_F | REF_SEG_G;
+  case 'I': return REF_SEG_B | REF_SEG_C;
+  case 'P': return REF_SEG_A | REF_SEG_B | REF_SEG_E | REF_SEG_F | REF_SEG_G;
+  case 'S': return REF_SEG_A | REF_SEG_C | REF_SEG_D | REF_SEG_F | REF_SEG_G;
+  case 'V': return REF_SEG_B | REF_SEG_C | REF_SEG_D | REF_SEG_E | REF_SEG_F;
+  case 'n': return REF_SEG_C | REF_SEG_E | REF_SEG_G;
+  case 'r': return REF_SEG_E | REF_SEG_G;
+  case 't': return REF_SEG_D | REF_SEG_E | REF_SEG_F | REF_SEG_G;
+  default: return 0U;
+  }
+}
+
+static void REF_DrawSevenSegment(uint16_t row,
+                                 uint16_t col,
+                                 char ch,
+                                 uint8_t width,
+                                 uint8_t height,
+                                 uint8_t thickness,
+                                 uint8_t bril)
+{
+  uint8_t mask = REF_SevenSegmentMask(ch);
+  uint8_t middle;
+  uint8_t upper_length;
+  uint8_t lower_row;
+  uint8_t lower_length;
+
+  if ((mask == 0U) || (width <= (uint8_t)(2U * thickness)) ||
+      (height <= (uint8_t)(3U * thickness)))
+  {
+    return;
+  }
+
+  middle = (uint8_t)((height - thickness) / 2U);
+  upper_length = (uint8_t)(middle - thickness);
+  lower_row = (uint8_t)(middle + thickness);
+  lower_length = (uint8_t)(height - thickness - lower_row);
+
+  if ((mask & REF_SEG_A) != 0U)
+  {
+    REF_DrawRectangle(row, (uint16_t)(col + thickness), thickness,
+                      (uint16_t)(width - (2U * thickness)), bril);
+  }
+  if ((mask & REF_SEG_G) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + middle), (uint16_t)(col + thickness), thickness,
+                      (uint16_t)(width - (2U * thickness)), bril);
+  }
+  if ((mask & REF_SEG_D) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + height - thickness), (uint16_t)(col + thickness), thickness,
+                      (uint16_t)(width - (2U * thickness)), bril);
+  }
+  if ((mask & REF_SEG_F) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + thickness), col, upper_length, thickness, bril);
+  }
+  if ((mask & REF_SEG_B) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + thickness), (uint16_t)(col + width - thickness),
+                      upper_length, thickness, bril);
+  }
+  if ((mask & REF_SEG_E) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + lower_row), col, lower_length, thickness, bril);
+  }
+  if ((mask & REF_SEG_C) != 0U)
+  {
+    REF_DrawRectangle((uint16_t)(row + lower_row), (uint16_t)(col + width - thickness),
+                      lower_length, thickness, bril);
+  }
+}
+
 static void REF_DrawDigitIds(const RefDisplayState *state,
                              const uint8_t *ids,
                              uint8_t count,
-                             uint16_t x,
-                             uint16_t y,
-                             uint8_t scale,
+                             uint16_t row,
+                             uint16_t col,
+                             uint8_t width,
+                             uint8_t height,
+                             uint8_t thickness,
+                             uint8_t gap,
                              uint8_t bril)
 {
   for (uint8_t i = 0U; i < count; ++i)
   {
-    REF_DrawChar(x, (uint16_t)(y + (i * 6U * scale)), REF_DigitToChar(state, ids[i]), scale, bril);
+    REF_DrawSevenSegment(row,
+                         (uint16_t)(col + (i * (uint8_t)(width + gap))),
+                         REF_DigitToChar(state, ids[i]),
+                         width,
+                         height,
+                         thickness,
+                         bril);
   }
+}
+
+static void REF_DrawOutline(uint16_t row,
+                            uint16_t col,
+                            uint16_t width,
+                            uint16_t height,
+                            uint8_t thickness,
+                            uint8_t bril)
+{
+  REF_DrawRectangle(row, col, thickness, width, bril);
+  REF_DrawRectangle((uint16_t)(row + height - thickness), col, thickness, width, bril);
+  REF_DrawRectangle(row, col, height, thickness, bril);
+  REF_DrawRectangle(row, (uint16_t)(col + width - thickness), height, thickness, bril);
+}
+
+static void REF_DrawDegreeMark(uint16_t row, uint16_t col, uint8_t bril)
+{
+  REF_DrawOutline(row, col, 6U, 6U, 2U, bril);
+}
+
+static void REF_DrawBitmap7(uint16_t row,
+                            uint16_t col,
+                            const uint8_t rows[7],
+                            uint8_t scale,
+                            uint8_t bril)
+{
+  for (uint8_t y = 0U; y < 7U; ++y)
+  {
+    for (uint8_t x = 0U; x < 7U; ++x)
+    {
+      if ((rows[y] & (uint8_t)(1U << (6U - x))) != 0U)
+      {
+        REF_DrawRectangle((uint16_t)(row + (y * scale)),
+                          (uint16_t)(col + (x * scale)),
+                          scale,
+                          scale,
+                          bril);
+      }
+    }
+  }
+}
+
+static void REF_DrawLocalMarker(uint16_t row, uint16_t col, uint8_t bril)
+{
+  static const uint8_t rows[7] = {
+    0x1CU, 0x22U, 0x2AU, 0x22U, 0x1CU, 0x08U, 0x3EU
+  };
+  REF_DrawBitmap7(row, col, rows, 2U, bril);
+}
+
+static void REF_DrawTargetMarker(uint16_t row, uint16_t col, uint8_t bril)
+{
+  static const uint8_t rows[7] = {
+    0x08U, 0x1CU, 0x2AU, 0x7FU, 0x2AU, 0x1CU, 0x08U
+  };
+  REF_DrawBitmap7(row, col, rows, 2U, bril);
 }
 
 static void REF_DrawReticle(uint8_t bril)
 {
   /* 中心十字准星：屏幕中心 (row 239, col 319) */
-  REF_DrawBar(238U, 240U, 160U, 3U, bril);   /* 水平线 */
-  REF_DrawBar(160U, 318U, 3U, 160U, bril);   /* 垂直线 */
-  REF_DrawBar(233U, 313U, 14U, 14U, bril);   /* 中心圆点外框 */
-  REF_DrawBar(236U, 316U, 8U, 8U, 0U);       /* 中心镂空 */
+  REF_DrawRectangle(239U, 278U, 3U, 84U, bril);
+  REF_DrawRectangle(198U, 319U, 84U, 3U, bril);
+  REF_DrawOutline(234U, 314U, 12U, 12U, 3U, bril);
 }
 
 static void REF_DrawBattery(const RefDisplayState *state, uint8_t bril)
 {
-  /* 右上角电池框：横向放置，位于方位角读数右侧 */
-  const uint16_t x = 78U;   /* row */
-  const uint16_t y = 470U;  /* col */
+  const uint16_t row = 102U;
+  const uint16_t col = 374U;
   uint8_t bars = 0U;
 
   if (REF_SymbolOn(state, REF_SYM_BATTERY_FRAME) == 0U)
@@ -586,12 +773,8 @@ static void REF_DrawBattery(const RefDisplayState *state, uint8_t bril)
     return;
   }
 
-  /* 电池外框 (宽 70 col x 高 26 row) */
-  REF_DrawBar(x, y, 70U, 3U, bril);                       /* 上边 */
-  REF_DrawBar((uint16_t)(x + 23U), y, 70U, 3U, bril);     /* 下边 */
-  REF_DrawBar(x, y, 3U, 26U, bril);                       /* 左边 */
-  REF_DrawBar(x, (uint16_t)(y + 67U), 3U, 26U, bril);     /* 右边 */
-  REF_DrawBar((uint16_t)(x + 7U), (uint16_t)(y + 70U), 12U, 5U, bril); /* 正极头 */
+  REF_DrawOutline(row, col, 32U, 15U, 2U, bril);
+  REF_DrawRectangle((uint16_t)(row + 4U), (uint16_t)(col + 32U), 7U, 4U, bril);
 
   bars += REF_SymbolOn(state, REF_SYM_BATTERY_1) ? 1U : 0U;
   bars += REF_SymbolOn(state, REF_SYM_BATTERY_2) ? 1U : 0U;
@@ -600,34 +783,50 @@ static void REF_DrawBattery(const RefDisplayState *state, uint8_t bril)
 
   for (uint8_t i = 0U; i < bars; ++i)
   {
-    REF_DrawBar((uint16_t)(x + 6U), (uint16_t)(y + 6U + (i * 15U)), 11U, 14U, bril);
+    REF_DrawRectangle((uint16_t)(row + 4U),
+                      (uint16_t)(col + 4U + (i * 6U)),
+                      7U,
+                      4U,
+                      bril);
   }
 }
 
 static void REF_DrawDirection(const RefDisplayState *state, uint8_t bril)
 {
-  /* 顶部方向标 E S W N E 横向排列一行，居中于屏幕顶部 */
-  const uint16_t row = 45U;
-  if (REF_SymbolOn(state, REF_SYM_DIR_E))    { REF_DrawText(row, 284U, "E", 2U, bril); }
+  const uint16_t row = 79U;
+  if (REF_SymbolOn(state, REF_SYM_DIR_E))    { REF_DrawText(row, 286U, "E", 2U, bril); }
   if (REF_SymbolOn(state, REF_SYM_DIR_S))    { REF_DrawText(row, 300U, "S", 2U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_DIR_W))    { REF_DrawText(row, 316U, "W", 2U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_DIR_N))    { REF_DrawText(row, 332U, "N", 2U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_DIR_NE_E)) { REF_DrawText(row, 348U, "E", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_DIR_W))    { REF_DrawText(row, 314U, "W", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_DIR_N))    { REF_DrawText(row, 328U, "N", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_DIR_NE_E)) { REF_DrawText(row, 342U, "E", 2U, bril); }
 }
 
 static void REF_DrawRange(const RefDisplayState *state, uint8_t bril)
 {
   static const uint8_t range_ids[] = {4U, 5U, 6U, 7U};
 
-  /* 距离：屏幕中部偏上的大字号 4 位数字 + M 单位 */
-  REF_DrawDigitIds(state, range_ids, 4U, 150U, 250U, 5U, bril);
-  if (REF_SymbolOn(state, REF_SYM_UNIT_M)) { REF_DrawText(160U, 380U, "M", 3U, bril); }
-  /* 首/末次回波标 F/E：距离数字左上方 */
-  if (REF_SymbolOn(state, REF_SYM_RANGE_FIRST_F)) { REF_DrawText(150U, 218U, "F", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_RANGE_LAST_E)) { REF_DrawText(150U, 218U, "E", 3U, bril); }
-  /* 单次/连续测距标 S/C：距离数字右侧 */
-  if (REF_SymbolOn(state, REF_SYM_RANGE_SINGLE)) { REF_DrawText(150U, 410U, "S", 2U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_RANGE_CONTINUOUS)) { REF_DrawText(174U, 410U, "C", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_RANGE_LAST_E))
+  {
+    REF_DrawText(137U, 248U, "E", 2U, bril);
+  }
+  if (REF_SymbolOn(state, REF_SYM_RANGE_FIRST_F))
+  {
+    REF_DrawText(137U, 270U, "F", 2U, bril);
+  }
+  if (REF_SymbolOn(state, REF_SYM_RANGE_SINGLE))
+  {
+    REF_DrawText(153U, 248U, "L", 3U, bril);
+  }
+  if (REF_SymbolOn(state, REF_SYM_RANGE_CONTINUOUS))
+  {
+    REF_DrawText(153U, 270U, "P", 3U, bril);
+  }
+
+  REF_DrawDigitIds(state, range_ids, 4U, 151U, 296U, 16U, 29U, 3U, 4U, bril);
+  if (REF_SymbolOn(state, REF_SYM_UNIT_M))
+  {
+    REF_DrawText(156U, 380U, "M", 3U, bril);
+  }
 }
 
 static void REF_DrawOrientation(const RefDisplayState *state, uint8_t bril)
@@ -635,16 +834,20 @@ static void REF_DrawOrientation(const RefDisplayState *state, uint8_t bril)
   static const uint8_t azimuth_ids[] = {1U, 2U, 3U};
   static const uint8_t pitch_ids[] = {26U, 27U};
 
-  /* 方位角：顶部方向标下方，3 位数字 + 度点，居中 */
-  REF_DrawDigitIds(state, azimuth_ids, 3U, 78U, 286U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_AZIMUTH_DEG)) { REF_DrawChar(78U, 340U, '.', 2U, bril); }
+  REF_DrawDigitIds(state, azimuth_ids, 3U, 100U, 294U, 13U, 25U, 2U, 4U, bril);
+  if (REF_SymbolOn(state, REF_SYM_AZIMUTH_DEG))
+  {
+    REF_DrawDegreeMark(101U, 346U, bril);
+  }
 
-  /* 俯仰角：屏幕左侧，P 标签 + 符号 + 2 位数字 + 度点 */
-  if (REF_SymbolOn(state, REF_SYM_PITCH_LABEL_P)) { REF_DrawText(232U, 60U, "P", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_PITCH_SIGN_MINUS)) { REF_DrawText(232U, 80U, "-", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_PITCH_SIGN_PLUS)) { REF_DrawText(232U, 80U, "+", 3U, bril); }
-  REF_DrawDigitIds(state, pitch_ids, 2U, 232U, 100U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_PITCH_DEG)) { REF_DrawChar(232U, 138U, '.', 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_PITCH_LABEL_P)) { REF_DrawText(210U, 176U, "P", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_PITCH_SIGN_MINUS)) { REF_DrawText(232U, 147U, "-", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_PITCH_SIGN_PLUS)) { REF_DrawText(232U, 147U, "+", 2U, bril); }
+  REF_DrawDigitIds(state, pitch_ids, 2U, 229U, 174U, 13U, 25U, 2U, 4U, bril);
+  if (REF_SymbolOn(state, REF_SYM_PITCH_DEG))
+  {
+    REF_DrawDegreeMark(230U, 209U, bril);
+  }
 }
 
 static void REF_DrawCoordinate(const RefDisplayState *state, uint8_t bril)
@@ -655,32 +858,29 @@ static void REF_DrawCoordinate(const RefDisplayState *state, uint8_t bril)
   static const uint8_t altitude_ids[] = {17U, 18U, 19U, 20U};
   static const uint8_t count_ids[] = {21U, 22U, 23U, 24U, 25U};
 
-  /* 坐标行：本机/目标标 + 首末标 + 经纬方向 + 度分秒，位于准星下方 */
-  const uint16_t coord_row = 320U;
-  if (REF_SymbolOn(state, REF_SYM_COORD_LOCAL)) { REF_DrawText(coord_row, 132U, "L", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_COORD_TARGET)) { REF_DrawText(coord_row, 132U, "T", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_COORD_FIRST_F)) { REF_DrawText(coord_row, 158U, "F", 2U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_COORD_LAST_E)) { REF_DrawText(coord_row, 158U, "E", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_LON_W)) { REF_DrawText(324U, 222U, "W", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_LAT_S)) { REF_DrawText(324U, 238U, "S", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_LON_E)) { REF_DrawText(324U, 254U, "E", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_LAT_N)) { REF_DrawText(324U, 270U, "N", 2U, bril); }
 
-  if (REF_SymbolOn(state, REF_SYM_LAT_N)) { REF_DrawText(coord_row, 178U, "N", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_LAT_S)) { REF_DrawText(coord_row, 178U, "S", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_LON_E)) { REF_DrawText(coord_row, 178U, "E", 3U, bril); }
-  if (REF_SymbolOn(state, REF_SYM_LON_W)) { REF_DrawText(coord_row, 178U, "W", 3U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_COORD_LOCAL)) { REF_DrawLocalMarker(321U, 325U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_COORD_TARGET)) { REF_DrawTargetMarker(321U, 351U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_COORD_FIRST_F)) { REF_DrawText(324U, 376U, "F", 2U, bril); }
+  if (REF_SymbolOn(state, REF_SYM_COORD_LAST_E)) { REF_DrawText(324U, 392U, "E", 2U, bril); }
 
-  REF_DrawDigitIds(state, degree_ids, 3U, coord_row, 206U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_COORD_DEG)) { REF_DrawChar(coord_row, 260U, '.', 2U, bril); }
-  REF_DrawDigitIds(state, minute_ids, 2U, coord_row, 278U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_COORD_MIN)) { REF_DrawChar(coord_row, 314U, '\'', 2U, bril); }
-  REF_DrawDigitIds(state, fraction_ids, 4U, coord_row, 330U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_COORD_SEC)) { REF_DrawChar(coord_row, 402U, '"', 2U, bril); }
+  REF_DrawDigitIds(state, degree_ids, 3U, 347U, 222U, 14U, 28U, 3U, 3U, bril);
+  if (REF_SymbolOn(state, REF_SYM_COORD_DEG)) { REF_DrawDegreeMark(348U, 274U, bril); }
+  REF_DrawDigitIds(state, minute_ids, 2U, 347U, 285U, 14U, 28U, 3U, 3U, bril);
+  if (REF_SymbolOn(state, REF_SYM_COORD_MIN)) { REF_DrawChar(346U, 319U, '\'', 2U, bril); }
+  REF_DrawDigitIds(state, fraction_ids, 2U, 347U, 330U, 14U, 28U, 3U, 3U, bril);
+  if (REF_SymbolOn(state, REF_SYM_COORD_DOT)) { REF_DrawRectangle(371U, 364U, 4U, 4U, bril); }
+  REF_DrawDigitIds(state, &fraction_ids[2], 2U, 347U, 373U, 14U, 28U, 3U, 3U, bril);
+  if (REF_SymbolOn(state, REF_SYM_COORD_SEC)) { REF_DrawChar(346U, 407U, '"', 2U, bril); }
 
-  /* 高程行 + 测量计数：坐标行下方 */
-  const uint16_t elev_row = 388U;
-  if (REF_SymbolOn(state, REF_SYM_ELEVATION_LABEL_H)) { REF_DrawText(elev_row, 188U, "H", 3U, bril); }
-  REF_DrawDigitIds(state, altitude_ids, 4U, elev_row, 222U, 3U, bril);
-  if (REF_SymbolOn(state, REF_SYM_ELEVATION_UNIT_M)) { REF_DrawText(elev_row, 294U, "M", 2U, bril); }
-
-  REF_DrawDigitIds(state, count_ids, 5U, elev_row, 360U, 2U, bril);
+  if (REF_SymbolOn(state, REF_SYM_ELEVATION_LABEL_H)) { REF_DrawText(390U, 222U, "H", 2U, bril); }
+  REF_DrawDigitIds(state, altitude_ids, 4U, 386U, 243U, 13U, 26U, 2U, 3U, bril);
+  if (REF_SymbolOn(state, REF_SYM_ELEVATION_UNIT_M)) { REF_DrawText(390U, 310U, "M", 2U, bril); }
+  REF_DrawDigitIds(state, count_ids, 5U, 388U, 344U, 12U, 24U, 2U, 3U, bril);
 }
 
 static void REF_Render(const RefDisplayState *state)
@@ -738,6 +938,13 @@ void KA025VG_UpdateState(const uint8_t *digits, uint64_t symbols, uint8_t all_on
       {
         g_current_display_state.digits[i] = -2;
       }
+      else if ((val >= 12U) && (val <= 22U))
+      {
+        static const char char_map[] = {
+          'A', 'C', 'E', 'H', 'I', 'P', 'S', 'V', 'n', 'r', 't'
+        };
+        g_current_display_state.digits[i] = (int8_t)char_map[val - 12U];
+      }
       else
       {
         g_current_display_state.digits[i] = -1;
@@ -754,4 +961,3 @@ void KA025VG_RenderAndShow(void)
   REF_Render(&g_current_display_state);
   (void)KA025VG_DrawGray8(ka025vg_framebuffer, sizeof(ka025vg_framebuffer));
 }
-
