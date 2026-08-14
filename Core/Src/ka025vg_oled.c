@@ -5,6 +5,12 @@
 
 #define KA025VG_QSPI_TIMEOUT_MS     1000U
 #define KA025VG_FRAME_BYTES         (KA025VG_WIDTH * KA025VG_HEIGHT)
+#define KA025VG_MONO_ROW_BYTES      ((KA025VG_WIDTH + 7U) / 8U)
+#define KA025VG_MONO_FRAME_BYTES    (KA025VG_MONO_ROW_BYTES * KA025VG_HEIGHT)
+#define KA025VG_GRAY8_ROW_WORDS     (KA025VG_WIDTH / 4U)
+#define KA025VG_PIXEL_ON            0xFFU
+
+_Static_assert((KA025VG_WIDTH % 8U) == 0U, "KA025VG width must be divisible by 8");
 
 #define KA025VG_QSPI_WRITE_IMAGE    0x32U
 #define KA025VG_IMAGE_ALT_BYTES     0x003C00U
@@ -15,7 +21,14 @@ static volatile uint8_t ka025vg_te_cmd;
 static volatile uint8_t ka025vg_te_ready;
 static volatile uint8_t ka025vg_te_frame;
 static volatile uint8_t ka025vg_te_count;
-static uint8_t ka025vg_framebuffer[KA025VG_FRAME_BYTES];
+static uint8_t ka025vg_mono_framebuffer[KA025VG_MONO_FRAME_BYTES];
+static uint32_t ka025vg_gray8_rows[2U][KA025VG_GRAY8_ROW_WORDS];
+static const uint32_t ka025vg_nibble_to_gray8[16] = {
+  0x00000000U, 0xFF000000U, 0x00FF0000U, 0xFFFF0000U,
+  0x0000FF00U, 0xFF00FF00U, 0x00FFFF00U, 0xFFFFFF00U,
+  0x000000FFU, 0xFF0000FFU, 0x00FF00FFU, 0xFFFF00FFU,
+  0x0000FFFFU, 0xFF00FFFFU, 0x00FFFFFFU, 0xFFFFFFFFU,
+};
 
 static HAL_StatusTypeDef KA025VG_QspiWriteCommand(uint8_t command,
                                                   const uint8_t *params,
@@ -359,10 +372,83 @@ void HAL_QSPI_TxCpltCallback(QSPI_HandleTypeDef *hqspi)
   }
 }
 
+static void KA025VG_ExpandMonoRow(uint32_t row, uint32_t *pixel_words)
+{
+  const uint8_t *mono_row = &ka025vg_mono_framebuffer[row * KA025VG_MONO_ROW_BYTES];
+
+  for (uint32_t byte = 0U; byte < KA025VG_MONO_ROW_BYTES; ++byte)
+  {
+    uint8_t bits = mono_row[byte];
+
+    pixel_words[byte * 2U] = ka025vg_nibble_to_gray8[bits >> 4U];
+    pixel_words[(byte * 2U) + 1U] = ka025vg_nibble_to_gray8[bits & 0x0FU];
+  }
+}
+
+static HAL_StatusTypeDef KA025VG_DrawMono1(void)
+{
+  QSPI_CommandTypeDef command = {0};
+  uint8_t current_buffer = 0U;
+
+  if (ka025vg_qspi == NULL)
+  {
+    return HAL_ERROR;
+  }
+
+  KA025VG_ExpandMonoRow(0U, ka025vg_gray8_rows[current_buffer]);
+
+  ka025vg_te_frame = 0U;
+  while (ka025vg_te_frame == 0U) {}
+  ka025vg_te_frame = 0U;
+
+  command.InstructionMode   = QSPI_INSTRUCTION_1_LINE;
+  command.Instruction       = KA025VG_QSPI_WRITE_IMAGE;
+  command.AddressMode       = QSPI_ADDRESS_NONE;
+  command.AddressSize       = QSPI_ADDRESS_24_BITS;
+  command.Address           = 0U;
+  command.AlternateByteMode = QSPI_ALTERNATE_BYTES_1_LINE;
+  command.AlternateBytes    = KA025VG_IMAGE_ALT_BYTES;
+  command.AlternateBytesSize = QSPI_ALTERNATE_BYTES_24_BITS;
+  command.DataMode          = QSPI_DATA_4_LINES;
+  command.DummyCycles       = 0U;
+  command.NbData            = KA025VG_WIDTH;
+  command.DdrMode           = QSPI_DDR_MODE_DISABLE;
+  command.DdrHoldHalfCycle  = QSPI_DDR_HHC_ANALOG_DELAY;
+  command.SIOOMode          = QSPI_SIOO_INST_EVERY_CMD;
+
+  for (uint32_t row = 0U; row < KA025VG_HEIGHT; ++row)
+  {
+    uint8_t next_buffer = (uint8_t)(current_buffer ^ 1U);
+
+    ka025vg_qspi_tx_done = 0U;
+    if (HAL_QSPI_Command(ka025vg_qspi, &command, KA025VG_QSPI_TIMEOUT_MS) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+    if (HAL_QSPI_Transmit_DMA(ka025vg_qspi, (uint8_t *)ka025vg_gray8_rows[current_buffer]) != HAL_OK)
+    {
+      return HAL_ERROR;
+    }
+
+    if ((row + 1U) < KA025VG_HEIGHT)
+    {
+      KA025VG_ExpandMonoRow(row + 1U, ka025vg_gray8_rows[next_buffer]);
+    }
+
+    while (ka025vg_qspi_tx_done == 0U) {}
+    ka025vg_qspi_tx_done = 0U;
+    current_buffer = next_buffer;
+  }
+
+  return HAL_OK;
+}
+
 HAL_StatusTypeDef KA025VG_Fill(uint8_t gray)
 {
-  (void)memset(ka025vg_framebuffer, gray, sizeof(ka025vg_framebuffer));
-  return KA025VG_DrawGray8(ka025vg_framebuffer, sizeof(ka025vg_framebuffer));
+  (void)memset(ka025vg_mono_framebuffer,
+               (gray == 0U) ? 0x00 : 0xFF,
+               sizeof(ka025vg_mono_framebuffer));
+  return KA025VG_DrawMono1();
 }
 
 #define REF_CUSTOM_DISPLAY_DIGIT_COUNT 27U
@@ -476,15 +562,8 @@ static char REF_DigitToChar(const RefDisplayState *state, uint8_t digit_id)
 
 static uint8_t REF_PixelBril(const RefDisplayState *state)
 {
-  static const uint8_t levels[] = {0x20U, 0x40U, 0x70U, 0xA0U, 0xFFU};
-  uint8_t level = 4U;
-
-  if ((state != NULL) && (state->brightness > 0U) && (state->brightness <= 5U))
-  {
-    level = (uint8_t)(state->brightness - 1U);
-  }
-
-  return levels[level];
+  (void)state;
+  return KA025VG_PIXEL_ON;
 }
 
 static void REF_DrawRectangle(uint16_t addr_x, uint16_t addr_y, uint16_t width, uint16_t height, uint8_t bril)
@@ -494,9 +573,22 @@ static void REF_DrawRectangle(uint16_t addr_x, uint16_t addr_y, uint16_t width, 
     return;
   }
 
-  for (uint16_t x = addr_x; x < (uint16_t)(addr_x + width); x++)
+  for (uint16_t row = addr_x; row < (uint16_t)(addr_x + width); ++row)
   {
-    (void)memset(&ka025vg_framebuffer[((uint32_t)x * KA025VG_WIDTH) + addr_y], bril, height);
+    for (uint16_t col = addr_y; col < (uint16_t)(addr_y + height); ++col)
+    {
+      uint32_t byte_index = ((uint32_t)row * KA025VG_MONO_ROW_BYTES) + (col >> 3U);
+      uint8_t mask = (uint8_t)(0x80U >> (col & 7U));
+
+      if (bril != 0U)
+      {
+        ka025vg_mono_framebuffer[byte_index] |= mask;
+      }
+      else
+      {
+        ka025vg_mono_framebuffer[byte_index] &= (uint8_t)~mask;
+      }
+    }
   }
 }
 
@@ -892,7 +984,7 @@ static void REF_Render(const RefDisplayState *state)
     return;
   }
 
-  (void)memset(ka025vg_framebuffer, 0x00, sizeof(ka025vg_framebuffer));
+  (void)memset(ka025vg_mono_framebuffer, 0x00, sizeof(ka025vg_mono_framebuffer));
   if (REF_SymbolOn(state, REF_SYM_RETICLE)) { REF_DrawReticle(bril); }
   REF_DrawBattery(state, bril);
   REF_DrawDirection(state, bril);
@@ -917,7 +1009,7 @@ HAL_StatusTypeDef KA025VG_ShowFixedScreen(void)
 {
   REF_ShowBootScreen();
 
-  return KA025VG_DrawGray8(ka025vg_framebuffer, sizeof(ka025vg_framebuffer));
+  return KA025VG_DrawMono1();
 }
 
 static RefDisplayState g_current_display_state;
@@ -959,5 +1051,5 @@ void KA025VG_UpdateState(const uint8_t *digits, uint64_t symbols, uint8_t all_on
 void KA025VG_RenderAndShow(void)
 {
   REF_Render(&g_current_display_state);
-  (void)KA025VG_DrawGray8(ka025vg_framebuffer, sizeof(ka025vg_framebuffer));
+  (void)KA025VG_DrawMono1();
 }
